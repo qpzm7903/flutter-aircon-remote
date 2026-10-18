@@ -1,5 +1,7 @@
 # flutter-aircon-remote 架构设计
 
+**v0.3.0 变更**：①新增 Gree **水平扫风**（`HorizontalSwing`，Byte4 bit4–6）与垂直**局部自动扫风**（`autoDown/autoMiddle/autoUp`）；②对 `union GreeProtocol` 与 `IRGreeAC` 做完整缺口审计（表见 `docs/versions/0.3.0.md` §3），补全**华氏度**（`UseFahrenheit`/`TempExtraDegreeF`）、**定时**（实验）、**Wi‑Fi 一次性按键**，温度显示源改为按上游要求的**循环顺序**切换；明确**跳过** I‑Feel、Econo 位、health；③所有新能力沿用数据驱动模型：协议声明 ∩ 设备隐藏覆盖（新增 `hiddenHSwings`、`AcFeature.swingH/wifi/timer/fahrenheit`），隐藏或受模式限制时归一化为中性值；④新设备/迁移设备带「默认隐藏种子」`AcProtocol.recommendedOverrides`（水平扫风默认隐藏）；⑤持久化 schema v3 + 幂等迁移 `DeviceSchemaV3Migrator`，v0.2 设备与状态零丢失。详见 §20–§26；§1.2/§3/§4/§5.3/§5.6/§12/§14/§15/§16/§17 中带「v0.3.0 修订」标记处以新章节为准。
+
 **v0.2.0 变更**：新增「多空调设备」(AcDevice / 首页列表 / 每台独立状态)、「添加空调 / 配对测试」向导（红外单向，无法自动发现）、协议型号移入设备设置并新增 Gree YX1FSF、按设备的能力覆盖 CapabilityOverrides 与「按钮说明」、持久化 schema v2 + v0.1 迁移。详见 §12–§19 与 `docs/versions/0.2.0.md`；§2/§3/§5/§7/§8/§9/§11 中带「v0.2.0 修订」标记处以新章节为准。
 
 > 状态：设计稿 v2（v0.1.0 为 v1；本稿增补 0.2.0）。本文档是实现（Codex）的唯一依据；
@@ -25,6 +27,7 @@
 ### 1.2 非目标（0.1.0 不做）
 - iOS / Windows / Web / 桌面；红外学习（接收）。（v0.2.0 修订：多设备档案已纳入 0.2.0，见 §12。）
 - 定时器（timer）、华氏度、Wi-Fi 位、I-Feel、Econo 位、水平扫风：协议里固定写 0（见 §5.3）。
+  **v0.3.0 修订**：水平扫风、华氏度、定时（实验）、Wi‑Fi 一次性按键已纳入 0.3.0（§20–§25）；**仍不做**：I‑Feel（上游无测温报文，手机无可信室温，见 §20.2）、Econo 位（真机帧恒 0，Econo 仅由 Mode=5 表达）、health。
 - 读取空调真实状态、**自动发现/检测空调**（红外单向，无反馈；界面显示的是“假定状态”；0.2.0 用「配对测试」向导替代，见 §13）。
 - 国际化：仅简体中文，字符串集中在 `presentation/strings.dart`，日后可替换为 l10n。
 - 外接红外设备（USB/音频口）。
@@ -130,9 +133,10 @@ lib/
 ├─ main.dart                              # composition root：初始化日志、装配依赖、runApp
 ├─ app.dart                               # AircondRemoteApp：MultiProvider + MaterialApp(theme/darkTheme)
 ├─ core/
-│  └─ constants.dart                      # AppConstants { appName, version='0.2.0', irChannelName, schema/设备 prefs keys }（v0.2.0 修订）
+│  └─ constants.dart                      # AppConstants { appName, version='0.3.0', irChannelName, schema/设备 prefs keys }（v0.2.0 修订；v0.3.0 修订：version=0.3.0，schema 版本为 3）
 ├─ domain/
-│  ├─ ac_enums.dart                       # AcMode, FanSpeed, VerticalSwing, TempDisplay, AcFeature
+│  ├─ ac_enums.dart                       # AcMode, FanSpeed, VerticalSwing, TempDisplay, AcFeature（v0.3.0 修订：+HorizontalSwing；VerticalSwing 追加 autoDown/autoMiddle/autoUp；AcFeature 追加 swingH/wifi/timer/fahrenheit）
+│  ├─ fahrenheit_step.dart                # 〔v0.3.0〕FahrenheitStep(f, c) 值对象；AcCapabilities 据此做华氏范围/换算（纯 Dart）
 │  ├─ ac_state.dart                       # AcState 不可变值对象 + JSON
 │  ├─ ac_capabilities.dart                # AcCapabilities, ModeRule, normalize()
 │  ├─ ir_frame.dart                       # IrFrame：carrierHz + patternMicros（+ 校验）
@@ -145,7 +149,7 @@ lib/
 │  ├─ pulse/
 │  │  └─ pulse_timing.dart                # PulseTimings + appendBitsLsbFirst（可复用于其他品牌）
 │  └─ gree/
-│     ├─ gree_constants.dart              # 位域位置、枚举数值、时序常量
+│     ├─ gree_constants.dart              # 位域位置、枚举数值、时序常量；〔v0.3.0〕greeFahrenheitTable（26 行）、垂直/水平扫风原生值显式表
 │     ├─ gree_state_codec.dart            # AcState <-> 8 字节（含校验和）
 │     ├─ gree_pulse_builder.dart          # 8 字节 -> List<int> 微秒序列（含中间 footer 与 gap）
 │     └─ gree_protocol.dart               # GreeProtocol(GreeModel)：组合 codec + builder + capabilities
@@ -159,11 +163,12 @@ lib/
 │  │  ├─ shared_prefs_remote_repository.dart
 │  │  ├─ device_repository.dart           # 〔v0.2.0〕abstract DeviceRepository
 │  │  ├─ shared_prefs_device_repository.dart # 〔v0.2.0〕schema v2 JSON
-│  │  └─ legacy_v1_migrator.dart          # 〔v0.2.0〕v0.1 -> v2 一次性迁移
+│  │  ├─ legacy_v1_migrator.dart          # 〔v0.2.0〕v0.1 -> v2 一次性迁移
+│  │  └─ device_schema_v3_migrator.dart   # 〔v0.3.0〕v2 -> v3：并入默认隐藏种子，幂等（§24）
 │  └─ logging/
 │     └─ log_service.dart                 # 按日落盘日志，风格同 flutter-snake 的 LogService
 ├─ application/
-│  ├─ remote_controller.dart              # RemoteController：〔v0.2.0 修订：每台设备一个〕状态、IR 可用性、发送串行化
+│  ├─ remote_controller.dart              # RemoteController：〔v0.2.0 修订：每台设备一个〕状态、IR 可用性、发送串行化；〔v0.3.0〕注入时钟、一次性 wifiPulse、定时折算（§23）
 │  ├─ remote_event.dart                   # sealed RemoteEvent（一次性事件：发送成功/失败/设备被删除）
 │  ├─ remote_session_factory.dart         # 〔v0.2.0〕按 deviceId 创建 RemoteController
 │  ├─ device_list_controller.dart         # 〔v0.2.0〕设备 CRUD / 排序 / 状态落盘的唯一入口
@@ -189,8 +194,10 @@ lib/
       ├─ temperature_display.dart         # 大号温度 + (−/+) 按钮，长按连发
       ├─ mode_selector.dart               # SegmentedButton，选项由 capabilities 决定
       ├─ fan_selector.dart
-      ├─ swing_selector.dart
-      └─ feature_toggles.dart             # FilterChip 组：turbo/light/health/xfan/sleep + tempDisplay
+      ├─ swing_selector.dart              # 垂直扫风；〔v0.3.0〕新增 horizontal_swing_selector.dart（水平扫风 ChoiceChip 组）
+      ├─ feature_toggles.dart             # FilterChip 组：turbo/light/health/xfan/sleep；〔v0.3.0 修订〕温度显示改为「下一档」按钮，新增 Wi‑Fi 一次性按钮
+      ├─ unit_toggle.dart                 # 〔v0.3.0〕℃/℉ 分段按钮（fahrenheit 特性可见时）
+      └─ timer_chip.dart                  # 〔v0.3.0〕定时入口 + 选择 sheet + 剩余时间（timer 特性可见时）
 ```
 
 ### 3.2 `test/`
@@ -217,7 +224,7 @@ test/
 │  └─ remote_controller_test.dart         # FakeIrTransmitter + InMemory repo
 ├─ presentation/
 │  └─ remote_page_test.dart               # 无 IR 横幅、控件随 capabilities 显隐/禁用
-├─ （v0.2.0 新增/修改的测试文件完整清单见 §18）
+├─ （v0.2.0 新增/修改的测试文件完整清单见 §18；v0.3.0 见 §26）
 ├─ architecture_test.dart                 # 扫描 lib/ 的 import，校验 §2 依赖规则
 └─ version_test.dart                      # AppConstants.version == pubspec.yaml 的 version
 ```
@@ -343,6 +350,13 @@ final class TransmitFailed extends RemoteEvent {
 | `xfan` | `bool` | 换气/防霉（关机后吹干） | `false` |
 | `sleep` | `bool` | 睡眠 | `false` |
 | `tempDisplay` | `TempDisplay` | off/setpoint/indoor/outdoor | `off` |
+| `horizontalSwing` | `HorizontalSwing` | **v0.3.0 修订** off/auto/maxLeft/left/middle/right/maxRight | `off` |
+| `targetTempF` | `int?` | **v0.3.0 修订** `null`=摄氏；非空=华氏模式（61..86，且为 `fahrenheitSteps` 内的值） | `null` |
+| `timerMinutes` | `int` | **v0.3.0 修订** 0 或 30..1440，30 的倍数 | `0` |
+| `timerSetAtMs` | `int?` | **v0.3.0 修订** 设定时刻（epoch ms）；`timerMinutes>0 ⇔ 非空` | `null` |
+| `wifiPulse` | `bool` | **v0.3.0 修订** 一次性按键标记：只存在于内存与单帧，**不持久化**（`toJson` 不写，`fromJson` 恒 false） | `false` |
+
+v0.3.0 修订：`verticalSwing` 取值扩展为 off/auto/highest/high/middle/low/lowest/**autoDown/autoMiddle/autoUp**（枚举追加在末尾，持久化用 name）。`useFahrenheit` 是派生 getter（`targetTempF != null`），不另存字段；华氏模式下 `targetTempC` 仍保留，由 `targetTempF` 经协议华氏表派生（供范围、模式规则、解码测试使用）。`toJson` 的 `'v'` 升为 2；v0.2 JSON（`'v':1`、无新键）读取为各字段默认。`copyWith` 对 `targetTempF`、`timerSetAtMs` 这类可空字段使用哨兵参数（`Object? x = _unset`），与 `CapabilityOverrides.copyWith` 一致。
 
 ```dart
 @immutable
@@ -411,6 +425,12 @@ class AcCapabilities {
 上表中 turbo/xfan/sleep 的模式限制来自实际遥控器行为的保守取值，IRremoteESP8266 本身只强制 Auto 锁温与 Dry 锁风速；
 这些规则集中在 `GreeProtocol` 的一张表里，后续按实测放宽只需改表和对应测试。
 
+**v0.3.0 修订（`AcCapabilities` 新增字段与规则，完整定义见 §21）**
+- 新增构造参数：`horizontalSwings: List<HorizontalSwing>`（空=不支持）、`fahrenheitSteps: List<FahrenheitStep>`（空=不支持华氏）、`timerStepMinutes`/`maxTimerMinutes`（0=不支持定时）。
+- `features` 新增 `swingH`、`wifi`、`timer`、`fahrenheit`；Gree 三个变体均声明，且**每个 `ModeRule.allowedFeatures` 都包含这四项**（上游对它们没有模式限制）。
+- `verticalSwings` = 全部 10 项；`horizontalSwings` = 全部 7 项。
+- `normalize` 在原 4 步基础上增补：水平扫风、华氏/摄氏、定时、Wi‑Fi 一次性标记（见 §21.3）。
+
 ---
 
 ## 5. 协议层
@@ -466,35 +486,45 @@ void appendBitsLsbFirst(List<int> out, int value, int bitCount, PulseTimings t);
 默认**只发送一次**（IRremote 的 `kGreeDefaultRepeat = 0`，与真实遥控器一致）；不引入 repeat 参数，保持 `IrFrame` 简单。
 
 ### 5.3 字节/位映射表（LSB = bit0；与 `union GreeProtocol` 位域一致）
-| Byte | 位 | 字段 | AcState 来源 / 取值 |
-|---|---|---|---|
-| 0 | 0–2 | Mode | auto=0, cool=1, dry=2, fan=3, heat=4（5=Econo 不使用） |
-| 0 | 3 | Power | `power` |
-| 0 | 4–5 | Fan | auto=0, low=1, medium=2, high=3 |
-| 0 | 6 | SwingAuto | `verticalSwing == auto` 时为 1，其余 0 |
-| 0 | 7 | Sleep | `sleep` |
-| 1 | 0–3 | Temp | `targetTempC − 16`（0..14） |
-| 1 | 4–7 | Timer* | 固定 0（无定时） |
-| 2 | 0–3 | TimerHours | 固定 0 |
-| 2 | 4 | Turbo | `turbo` |
-| 2 | 5 | Light | `light` |
-| 2 | 6 | ModelA | `power && model == yaw1f`（**关机时为 0**，见 Issue814 向量）；v0.2.0：`power && (model == yaw1f || model == yx1fsf)`（§17） |
-| 2 | 7 | Xfan | `xfan` |
-| 3 | 0–1 | — | 0 |
-| 3 | 2 | TempExtraDegreeF | 0 |
-| 3 | 3 | UseFahrenheit | 0（仅摄氏） |
-| 3 | 4–7 | unknown1 | 固定 `0b0101`（字节 = 0x50） |
-| 4 | 0–3 | SwingV | off=0（Last pos）, auto=1, highest=2, high=3, middle=4, low=5, lowest=6 |
-| 4 | 4–6 | SwingH | 0（水平扫风不做） |
-| 5 | 0–1 | DisplayTemp | off=0, setpoint=1, indoor=2, outdoor=3 |
-| 5 | 2 | IFeel | 0 |
-| 5 | 3–5 | unknown2 | 固定 `0b100`（该字节基准值 0x20） |
-| 5 | 6 | WiFi | 0 |
-| 6 | 0–7 | — | 0 |
-| 7 | 2 | Econo | 0 |
-| 7 | 4–7 | Sum | 校验和（见下） |
+> **v0.3.0 修订：本表已覆盖联合体全部 64 位，无遗漏**（每个字段、每个无名保留位都出现）。「校验和」列标明该位所在半字节是否参与校验和（见下）。
 
-其余未列位均为 0。**基准帧**（IRremote `stateReset`）：`00 09 20 50 00 20 00 50`（关机/自动/25 °C/灯亮）。
+| Byte | 位 | 字段（`ir_Gree.h`） | AcState 来源 / 取值 | 校验和 |
+|---|---|---|---|---|
+| 0 | 0–2 | Mode | auto=0, cool=1, dry=2, fan=3, heat=4，**econo=5（仅 YX1FSF，v0.2）**；6、7 不使用 | 低半字节 ✔ |
+| 0 | 3 | Power | `power` | 低 ✔ |
+| 0 | 4–5 | Fan | auto=0, low=1, medium=2, high=3 | 高 ✘ |
+| 0 | 6 | SwingAuto | **v0.3.0 修订**：`verticalSwing ∈ {auto, autoDown, autoMiddle, autoUp}` 时为 1，其余 0 | 高 ✘ |
+| 0 | 7 | Sleep | `sleep` | 高 ✘ |
+| 1 | 0–3 | Temp | 摄氏：`targetTempC − 16`（0..14）；**v0.3.0 修订**华氏：`greeFahrenheitTable[F].c − 16` | 低 ✔ |
+| 1 | 4 | TimerHalfHr | **v0.3.0**：`(timerMinutes % 60) >= 30` | 高 ✘ |
+| 1 | 5–6 | TimerTensHr | **v0.3.0**：`(timerMinutes ~/ 60) ~/ 10`（0..2） | 高 ✘ |
+| 1 | 7 | TimerEnabled | **v0.3.0**：`timerMinutes >= 30` | 高 ✘ |
+| 2 | 0–3 | TimerHours | **v0.3.0**：`(timerMinutes ~/ 60) % 10`（BCD 个位） | 低 ✔ |
+| 2 | 4 | Turbo | `turbo` | 高 ✘ |
+| 2 | 5 | Light | `light` | 高 ✘ |
+| 2 | 6 | ModelA | `power && model == yaw1f`（**关机时为 0**，见 Issue814 向量）；v0.2.0：`power && (model == yaw1f || model == yx1fsf)`（§17） | 高 ✘ |
+| 2 | 7 | Xfan | `xfan` | 高 ✘ |
+| 3 | 0–1 | （无名保留） | 0 | 低 ✔ |
+| 3 | 2 | TempExtraDegreeF | **v0.3.0**：华氏表的 `extra`；摄氏恒 0 | 低 ✔ |
+| 3 | 3 | UseFahrenheit | **v0.3.0**：`targetTempF != null` | 低 ✔ |
+| 3 | 4–7 | unknown1 | 固定 `0b0101`（Byte3 = 0x50，再或上 F 位 0x0C） | 高 ✘ |
+| 4 | 0–3 | SwingV | 显式原生值表（**禁止用 enum.index**）：off=0（kGreeSwingLastPos，保持上次位置）, auto=1, highest=2（Up）, high=3（MiddleUp）, middle=4, low=5（MiddleDown）, lowest=6（Down）, **autoDown=7, autoMiddle=9, autoUp=11**；8、10、12–15 不使用（解码→off） | 低 ✘ |
+| 4 | 4–6 | SwingH | **v0.3.0**：off=0, auto=1, maxLeft=2, left=3, middle=4, right=5, maxRight=6；7 不使用（上游 `setSwingHorizontal(>6)` → Off） | 高 ✔ |
+| 4 | 7 | （无名保留） | 0 | 高 ✔ |
+| 5 | 0–1 | DisplayTemp | off=0, setpoint=1, indoor=2, outdoor=3 | 低 ✘ |
+| 5 | 2 | IFeel | **恒 0（v0.3.0 决策：不支持，§20.2）**；解码忽略 | 低 ✘ |
+| 5 | 3–5 | unknown2 | 固定 `0b100`（该字节基准值 0x20） | bit3 ✘；bit4–5 ✔（bit5 恒 1，bit4 恒 0） |
+| 5 | 6 | WiFi | **v0.3.0**：`wifiPulse`（一次性，仅当次帧） | 高 ✔ |
+| 5 | 7 | （无名保留） | 0 | 高 ✔ |
+| 6 | 0–7 | （无名保留） | 0 | 高半字节 ✔，低半字节 ✘ |
+| 7 | 0–1 | （无名保留） | 0 | ✘ |
+| 7 | 2 | Econo | 恒 0（v0.3.0 决策：不写，真机帧恒 0，Econo 仅由 Mode=5 表达） | ✘ |
+| 7 | 3 | （无名保留） | 0 | ✘ |
+| 7 | 4–7 | Sum | 校验和（见下） | — |
+
+「校验和」列精确含义：校验和 = 10 + Σ(Byte0..3 的**低**半字节) + Σ(Byte4..6 的**高**半字节)。因此 ✔ 表示该位所在的半字节参与求和（Byte0–3 的低半字节；Byte4–6 的高半字节）。注意定时的 Byte1 高半字节（Half/Tens/Enabled）**不**参与，而 Byte2 低半字节（TimerHours）参与；SwingH、WiFi、unknown2 的位在 Byte4/5 的高半字节中参与，SwingV 与 DisplayTemp 在低半字节中不参与。「✘」仅表示不参与，位值照常写入。
+
+其余未列位均为 0（本表已无遗漏）。**基准帧**（IRremote `stateReset`）：`00 09 20 50 00 20 00 50`（关机/自动/25 °C/灯亮）。
 
 **健康（health）**：IRremoteESP8266 的 Gree 位域**没有**文档化的 health/ionizer 位，本项目不得臆造。
 0.1.0：`AcState.health` 与 `AcFeature.health` 保留在领域层，Gree 能力集不声明该特性（UI 自动不显示，编码不写任何位）。
@@ -549,6 +579,8 @@ checksum = sum & 0x0F                        // 写入 bytes[7] 高 4 位：byte
 6. **registry**：id 唯一；`byId('gree.yaw1f')` 命中；未知 id → null；`modelsOf('gree')` 长度 2；重复 id 抛 `StateError`。
 7. **MethodChannelIrTransmitter**：用 `TestDefaultBinaryMessengerBinding` mock channel，校验参数结构与各错误码 → `IrErrorCode` 映射。
 8. **controller**：见 §8。**widget**：见 §9。
+
+**v0.3.0 修订（协议测试）**：向量表增加 `provenance` 字段（`reference` / `reference-decode` / `derived`），新向量全文见 `docs/versions/0.3.0.md` §10.1 与本文 §26；原 `heat-indoor`（unknown2=0）仍为 `reference-decode`。v0.2 全部向量在新字段默认值下逐字节不变是硬性回归测试。`GreeStateCodec` 的 `encode/decode` 增补全部新字段；`decode` 对 I‑Feel、Econo 位、保留位一律忽略，`encode` 恒写 0。
 
 ---
 
@@ -896,6 +928,17 @@ final class CapabilityOverrides {
 ```
 JSON 示例：`{"hiddenFeatures":["light"],"hiddenModes":[],"hiddenFanSpeeds":[],"hiddenSwings":["highest","lowest"],"minTempC":18,"maxTempC":null}`。
 
+**v0.3.0 修订**：
+```dart
+final class CapabilityOverrides {
+  // 新增：final Set<HorizontalSwing> hiddenHSwings;   // JSON 键 'hiddenHSwings'；HorizontalSwing.off 不可隐藏（忽略）
+  // hiddenFeatures 的合法名新增 swingH / wifi / timer / fahrenheit（整行/整控件隐藏）
+  // hiddenSwings 的合法名新增 autoDown / autoMiddle / autoUp
+  // copyWith / isEmpty / == / hashCode / toJson / fromJson 全部包含 hiddenHSwings；缺键 = 空集
+}
+```
+`fromJson` 对 v0.2 JSON（无 `hiddenHSwings`）返回与原对象等价的覆盖。**默认隐藏是种子，不是规则**：`AcProtocol.recommendedOverrides`（见 §22.5）在「新建设备」和「v0.2→v0.3 迁移」时一次性写入 `hiddenFeatures/hiddenSwings`，此后完全由 `CapabilityOverrides` 决定，运行时没有任何“默认隐藏”特例。
+
 ### 12.3 有效能力（Effective Capabilities）— 按钮如何决定（回应“按钮是写死的吗？”）
 **不是写死在界面里的**。界面上每个按钮是否出现/可点，由三层依次决定：
 
@@ -914,6 +957,8 @@ JSON 示例：`{"hiddenFeatures":["light"],"hiddenModes":[],"hiddenFanSpeeds":[]
 | `modes` | `modes − o.hiddenModes`（保持原顺序）；若结果为空则**忽略该覆盖**（至少保留一个模式） |
 | `fanSpeeds` | `fanSpeeds − o.hiddenFanSpeeds`；为空则忽略该覆盖 |
 | `verticalSwings` | `verticalSwings − o.hiddenSwings`，且 `off` 始终保留；长度 ≤ 1（只剩 off）时 UI 隐藏扫风整行 |
+| `horizontalSwings`（v0.3.0 修订） | `horizontalSwings − o.hiddenHSwings`，`off` 始终保留；**另外**若 `swingH ∈ o.hiddenFeatures`，水平扫风整体视为隐藏（UI 不渲染；`features` 中去掉 `swingH`）；长度 ≤ 1 同样隐藏整行 |
+| `fahrenheitSteps`（v0.3.0 修订） | 先应用温度范围覆盖（见下行），再保留 `c ∈ [有效 min, 有效 max]` 的步；`fahrenheit ∈ o.hiddenFeatures` 时 UI 不显示 ℃/℉ 切换且强制摄氏 |
 | `features` | `features − o.hiddenFeatures`；且 `suppressedFeatures = o.hiddenFeatures ∩ protocol.features`（见 §12.4） |
 | `tempDisplays` | 不变（由 `tempDisplay ∈ features` 门控） |
 | `minTempC/maxTempC` | `max(原min, o.min)`、`min(原max, o.max)`；若 `min > max` 则忽略温度覆盖 |
@@ -931,6 +976,11 @@ JSON 示例：`{"hiddenFeatures":["light"],"hiddenModes":[],"hiddenFanSpeeds":[]
 | `sleep` | false | 默认关 |
 | `health` | false | 默认关（Gree 本就不支持） |
 | `tempDisplay` | `TempDisplay.off` | 默认关 |
+| `swingH`（v0.3.0 修订） | `HorizontalSwing.off`（Byte4 高半字节=0） | 即 v0.2 的硬编码值，隐藏后帧与 v0.2 逐字节相同 |
+| `wifi`（v0.3.0 修订） | `wifiPulse=false`（Byte5 bit6=0） | 一次性键，不应被隐藏态触发 |
+| `timer`（v0.3.0 修订） | `timerMinutes=0, timerSetAtMs=null`（定时位全 0） | 默认无定时 |
+| `fahrenheit`（v0.3.0 修订） | 摄氏：`targetTempF=null`，`targetTempC` 保持（由原华氏值派生，已是有效摄氏） | 默认摄氏；换算无损（表内 C↔F 往返恒等） |
+| 隐藏的水平扫风位置正是当前位置 | `HorizontalSwing.off` | 同垂直扫风 |
 | `light` | **true**（默认=亮，不是关） | 无灯的空调忽略该位；有灯的空调不应被意外熄屏 |
 | 隐藏的模式正是当前模式 | 回落 `effective.modes.first` | 沿用 normalize 现有逻辑 |
 | 隐藏的风速正是当前风速 | 回落 `effective.fanSpeeds.first` | 同上 |
@@ -940,6 +990,7 @@ JSON 示例：`{"hiddenFeatures":["light"],"hiddenModes":[],"hiddenFanSpeeds":[]
 - 重新显示该功能时**不恢复**隐藏前的值（保持中性值），与 0.1「切换模式后不恢复」一致。
 - **调用顺序（重要）**：`RemoteController` 必须先用**有效能力**对状态 `normalize`，再 `protocol.encode(state)`。`encode` 内部再用协议能力 normalize 一次是幂等的（有效⊆协议，中性值在协议范围内），因此帧不会泄漏隐藏项。设置变更（协议/覆盖）时同样重新 normalize 并落盘，但**不发码**。
 - 配对向导的探测帧只用协议能力，不使用覆盖（§13）。
+- **v0.3.0 修订**：新特性与既有特性走**同一**机制——「用户隐藏 → 中性值」（`suppressedFeatures`）与「模式不允许 → 关闭值」（`ModeRule.allowedFeatures`）。对新四项，两种值相同（见上表），且 Gree 的所有模式都允许它们，所以 `lockedByMode` 状态对其不会出现，但机制保持通用（其他协议可限制）。完整归一化顺序见 §21.3。
 
 ### 12.5 「按钮说明」数据（`domain/capability_explainer.dart`，纯函数）
 ```dart
@@ -949,6 +1000,7 @@ final class ControlExplanation { ControlKind kind; Object? item; /* AcMode|FanSp
 List<ControlExplanation> explainControls({required AcCapabilities protocol, required CapabilityOverrides overrides, AcState? state});
 ```
 - 对 `AcMode.values`、`FanSpeed.values`、`VerticalSwing.values`（不含 off）、`AcFeature.values`、温度各产出一项。
+  **v0.3.0 修订**：`ControlKind` 追加 `horizontalSwing`；对 `HorizontalSwing.values`（不含 off）各产出一项（判定：`protocol.horizontalSwings` / `overrides.hiddenHSwings`，且 `swingH ∈ overrides.hiddenFeatures` 时全部为 `hiddenByUser`）；`VerticalSwing.values` 现含三个局部扫风；`AcFeature.values` 现含 `swingH/wifi/timer/fahrenheit`。I‑Feel 不属于任何枚举，由 `ControlHelpSheet` 底部固定说明（`Strings.ifeelNote`）。
 - 判定优先级：不在 `protocol` 里 → `unsupportedByProtocol`；在 `overrides` 隐藏集里 → `hiddenByUser`；传入 `state` 且在该状态下被 `ModeRule` 禁用（功能不允许 / 固定风速 / 不可调温）→ `lockedByMode`；否则 `available`。
 - 「按钮说明」面板（`control_help_sheet.dart`，遥控页与设置页均可打开）：顶部三行说明（①按钮由「遥控协议能做的」与「你在设置里保留的」共同决定；②灰色=当前模式下不可用，切模式可恢复；③隐藏的功能发送时保持默认：灯光=亮，其余=关）；下面按类别列出每项及状态徽标（可用 / 已隐藏〔去设置恢复〕/ 此协议不支持 / 当前模式不可用）。文案集中在 `strings.dart`。
 
@@ -1064,6 +1116,8 @@ class AddDeviceWizardController extends ChangeNotifier {
 | `remote.protocolId`、`remote.state.*` | v0.1 遗留键：迁移后**保留不删**（便于回滚/排查），v0.2 不再读写 |
 `AcState.toJson()` 的 `'v'` 仍为 1；`AcState.fromJson` 需识别 `mode == 'econo'`（未知枚举名仍回落 cool）。
 
+**v0.3.0 修订**：`app.schemaVersion` = **3**；`device.index` 为 `{"v":3,…}`；`AcState.toJson()` 的 `'v'` 升为 2（读取仍接受 1）。迁移链与细节见 §24（`LegacyV1Migrator` 不改动，其后串接 `DeviceSchemaV3Migrator`）。`SharedPrefsDeviceRepository.load()`：`LegacyV1Migrator` → `DeviceSchemaV3Migrator` → 读取索引与状态；`saveDevices` 写 `'v':3`。
+
 ### 14.2 `DeviceRepository`（`infrastructure/persistence/device_repository.dart`）
 ```dart
 abstract interface class DeviceRepository {
@@ -1128,6 +1182,7 @@ final class DeviceRemoved extends RemoteEvent {}   // 新增事件：设备被�
 - 构造时 `devices.addListener(_onDevicesChanged)`，`dispose` 时移除。`_onDevicesChanged`：设备已不存在 → 发 `DeviceRemoved`，清空待发；否则若协议或 overrides 变了 → 清空 `_pending`，`state = capabilities.normalize(state)`；若变化则 `devices.saveState`；`notifyListeners()`；**不发码**。仅名称/房间/图标变化 → 仅 notify。
 - `update`：沿用 0.1 的串行化+合并；`next = capabilities.normalize(mutate(state))`（**有效能力**）；落盘改为 `devices.saveState(device.id, next)`；发送用 `_pendingProtocol.encode(next)`，日志格式 `deviceId | protocolId | hex | n | ms`。
 - 切到别的设备/返回首页时不保留任何在途发送（路由销毁即 `dispose`，`_pending=null`）。
+- **v0.3.0 修订**：构造器新增可选 `int Function() nowMs`（默认 `DateTime.now().millisecondsSinceEpoch`，测试注入）。`update` 的归一化管线改为 `next = capabilities.normalize(resolveTimer(mutate(state), nowMs()))`；新增语法糖与一次性标记处理，详见 §23。
 - 两台设备互不影响：各自 `AcState`、各自 `protocol`、各自覆盖。
 
 ### 15.4 `DeviceSettingsController`（设置页草稿）
@@ -1168,6 +1223,14 @@ class DeviceSettingsController extends ChangeNotifier {
 - 控件显隐全部来自**有效能力** `capabilities`：模式行仅在 `modes.length>1`；风速行仅在 `fanSpeeds.length>1`；扫风行仅在 `verticalSwings.length>1`；功能 chip 仅渲染 `features` 内项；温度显示选择器需 `tempDisplay∈features && tempDisplays.length>1`；`−/+` 的边界 = `capabilities.minTempC/maxTempC`。灰色禁用来自 `isFeatureEnabled/canEditTemp/canEditFan`。
 - 收到 `DeviceRemoved` → `Navigator.pop` + SnackBar「该空调已被删除」。
 - `econo` 模式的 `SegmentedButton` 标签「节能」，图标 `eco`。
+- **v0.3.0 修订**（新增/变化的控件，显隐规则同上，全部来自有效能力）：
+  - 水平扫风行（`HorizontalSwingSelector`）：`features ∋ swingH && horizontalSwings.length>1` 才渲染，位于垂直扫风行下方；标签「关 / 自动 / 最左 / 偏左 / 居中 / 偏右 / 最右」。
+  - 垂直扫风行：选项多出三个局部扫风「上部扫风 / 中部扫风 / 下部扫风」（默认被隐藏种子藏起）。
+  - 温度旁 ℃/℉ 分段按钮（`fahrenheit ∈ features` 才渲染）；华氏下大号温度显示 `77°F`，−/＋ 步进 1，边界为有效 `[minF, maxF]`。
+  - 「温度显示」由下拉改为**「下一档」按钮**：显示当前源（关/设定/室内/室外），点击发送下一档（循环 off→setpoint→indoor→outdoor→off，跳过不在 `tempDisplays` 的项），原因见 §20.3。
+  - 「定时」chip（`timer ∈ features`）：显示「定时 · 未设置」或「定时 · 约 2 小时 30 分后」；点击弹出选择 sheet（关 / 0.5 h … 24 h，步长 0.5 h，附「实验功能，以空调实际反应为准」）。
+  - 「空调 Wi‑Fi」`ActionChip`（`wifi ∈ features`）：一次性按钮，点击发一帧，无选中态。
+  - 无红外时与其他控件一样整体禁用。
 
 ### 16.4 `AddDevicePage`（向导页）
 `Stepper`-less 简洁多页（`AnimatedSwitcher` 按 `state.step`）：
@@ -1182,6 +1245,7 @@ class DeviceSettingsController extends ChangeNotifier {
 1. **基本信息**：名称、房间、图标。
 2. **遥控协议型号**（标题必须用此措辞，不要叫“设备/空调”）：下拉（`ProtocolOption`：`格力 Gree / YAW1F` + `note`）+ 说明小字「同一品牌的不同遥控器编码，不是不同的空调。选错可能导致部分按键无效」+ 〔重新配对测试〕按钮。
 3. **功能显示**（每项一个 `SwitchListTile`，仅列出**协议支持**的项；关=隐藏）：模式（各模式一行）、风速（各档）、扫风（总开关“有扫风功能”，展开可单独关闭某些位置）、附加功能（强劲/灯光/换气/睡眠/温度显示）、温度范围（`RangeSlider`）。底部说明「隐藏的功能不会出现在遥控页，发送时保持默认（灯光=亮，其余=关）」+ 〔按钮说明〕入口。
+   **v0.3.0 修订**：本组新增——「水平扫风」总开关（对应 `hiddenFeatures ∋ swingH`，展开后可单独关闭各水平位置 → `hiddenHSwings`）；扫风分组里多三项「上部/中部/下部扫风」（局部自动扫风）；「华氏度（℃/℉ 切换）」；「定时（实验）」；「空调 Wi‑Fi 键」。这些行仅在协议支持时列出（Gree 三个变体均支持）；新建/迁移设备里 swingH、wifi、timer、fahrenheit 及三个局部扫风**默认关**（YX1FSF 新建设备的 fahrenheit 默认开），关闭状态下行内小字提示「此机型多数没有该功能，按需打开」。`DeviceSettingsController` 新增 `setHSwingVisible(HorizontalSwing, bool)`、`setAllHSwingVisible(bool)`（沿用 `setFeatureVisible(AcFeature.swingH,…)` 作为总开关）。
 4. **危险区**：〔删除此空调〕（二次确认）。
 
 ## 17. Gree YX1FSF 编码
@@ -1198,6 +1262,7 @@ class DeviceSettingsController extends ChangeNotifier {
 - **决策说明（与上游代码不一致处，务必按此实现）**：上游 `IRGreeAC::setPower` 只在 `model==YAW1F` 时置 ModelA，若按 `setModel(YX1FSF)` 编码会得到 ModelA=0；但上游收录的**真实 YX1FSF 遥控器抓包** `1D 09 60 58 00 20 00 A0`（byte2 = `0x60`，ModelA=1）显示该机型开机时 ModelA=1，且 IRsend.h 注释称其“类似 YAW1F”。以实测向量为准：`modelA = power && (model == yaw1f || model == yx1fsf)`。
 - 上游 `setEcono(true)` 还会置 byte7 bit2；但真实抓包 Econo 位为 0（`toString` 显示 `Econo: Off`），故本项目 Econo 仅通过 Mode=5 表达，**不写 byte7 bit2**。
 - 该抓包的 byte3=`0x58`（UseFahrenheit=1，77 °F），本项目仅摄氏，故编码向量使用 byte3=`0x50` 的摄氏等价帧；原始抓包只用于**解码/校验和**断言（与 0.1 对 `heat-indoor` 的处理方式一致，记入 plan 偏差）。
+  **v0.3.0 修订**：支持华氏后，该抓包 `1D 09 60 58 00 20 00 A0` 升级为 **encode 向量**（状态：YX1FSF，开，节能，`targetTempF=77`，低风）；v0.2 的摄氏等价向量继续保留。
 
 ### 17.2 领域与协议改动
 - `AcMode` 追加 `econo`（枚举末尾，`index==5`，JSON 名 `'econo'`）。UI 标签「节能」。
@@ -1277,3 +1342,215 @@ class DeviceSettingsController extends ChangeNotifier {
 - YX1FSF 的 ModelA 取值依据单条上游抓包，econo 模式下的功能约束为保守取值，待真机验证。
 - 隐藏灯光时发送“灯亮”的中性值假设“无灯空调忽略该位、有灯空调保持常亮”；如实机反馈不符，只需改 §12.4 的中性值表（`AcState.initial()` 的 `light` 默认值）及测试。
 - 迁移只保留所选协议的旧状态；其他协议旧状态被丢弃（同一台空调的备选型号，影响很小）。
+
+---
+
+# v0.3.0 设计增补（§20–§26）
+
+范围：只做 Gree，不新增品牌；本阶段只有设计（实现按 §26 的 M14–M19）。逐字段审计表在 `docs/versions/0.3.0.md` §3，这里给出决策依据与实现契约。
+
+## 20. 协议审计结论与关键决策
+
+### 20.1 结论
+`union GreeProtocol` 全部字段 + `IRGreeAC` 全部 setter/getter + `ir_Gree.h` 全部常量逐项核对。
+- **已有，不变**：Power、Mode（含 YX1FSF 的 Econo=5）、Temp（摄氏）、Fan、Turbo、Light、Xfan、Sleep、ModelA、SwingAuto（自动）、SwingV 固定位、DisplayTemp、unknown1/2、保留位、校验和、时序。
+- **新增**：SwingH（水平扫风）、SwingV 局部自动（7/9/11）、UseFahrenheit + TempExtraDegreeF、Timer 全部位、WiFi 位（一次性）。
+- **修正**：DisplayTemp 必须按顺序逐档发送（上游 `setDisplayTempSource` 注释）。
+- **跳过**：IFeel、Econo 位、SwingV 的 8/10/12–15、SwingH 的 7、health、quiet/filter/beep/clock/sensor。
+
+### 20.2 为什么不做 I‑Feel
+`IFeel`（Byte5 bit2）只是告诉空调“请使用遥控器报告的温度”。真机遥控器此后要**周期性**发送当前室温。检查本地上游快照：`ir_Gree.h/.cpp` 没有任何测温报文的常量、发送函数或编码（`sendGree` 仅发送 8 字节状态帧；`toCommon` 注释 “no support for Sensor temp”；`IRsend.h` 里的 `sensorTemperature` 只是通用 `stdAc::state_t` 字段，Gree 不使用）。所以**上游不支持发送它**。此外：手机没有可信的室温传感器（电池/CPU 发热、不在空调附近），Android 也不能可靠后台周期发红外。置位却不送测温报文，可能令空调丢失自身温度参考，属于有害的“半实现”。结论：编码恒写 0，解码忽略，说明页写明原因（`Strings.ifeelNote`）。
+
+### 20.3 DisplayTemp 顺序约束 → 「下一档」交互
+上游：“必须按 off→set→inside→outside→off 顺序发送，否则空调表现不正常”。v0.2 的任意选择下拉与之冲突（例如 off 直接选 outside）。取舍：①下拉 + 自动补发中间档（多帧、需帧间延时，与“发送合并”冲突，复杂）；②**单按钮循环**（与实体遥控器一致，每次点击一帧，天然合法）。选 ②。`RemoteController.cycleTempDisplay()` = `update` 把 `tempDisplay` 设为 `tempDisplays` 中的下一档（循环，受有效 `tempDisplays` 限制）。协议能力 `tempDisplays` 仍为四项，`AcState.tempDisplay` 语义不变（假定状态）。
+
+### 20.4 Wi‑Fi 位为什么是一次性按键
+`WiFi`（Byte5 bit6）在上游是普通状态位，语义无文档（只有 `PR #770` 的两条帧）。真机遥控器的“Wi‑Fi”键更像动作键。若做成持久开关，之后**每一帧**都带该位，可能反复触发。故建模为 `AcState.wifiPulse`：只在被点击后的**下一帧**置位，该帧发送后（成功或失败）立即清除，不持久化。默认隐藏。
+
+### 20.5 默认可见性
+见 `docs/versions/0.3.0.md` §4：`swingH`、`wifi`、`timer`、三个局部垂直扫风默认隐藏；`fahrenheit` 默认隐藏，仅 YX1FSF 新建设备默认显示。水平扫风默认隐藏的理由：多数壁挂机水平导风板为手动，永远无效的按钮比缺失更误导；且隐藏时帧与 v0.2 逐字节相同（零回归）。
+
+## 21. 领域层（v0.3.0）
+
+### 21.1 枚举（`ac_enums.dart`）
+```dart
+enum HorizontalSwing { off, auto, maxLeft, left, middle, right, maxRight }          // 原生值 0..6（协议层显式表）
+enum VerticalSwing { off, auto, highest, high, middle, low, lowest,
+                     autoDown, autoMiddle, autoUp }                                   // 追加在末尾，持久化用 name
+enum AcFeature { turbo, light, health, xfan, sleep, tempDisplay,
+                 swingH, wifi, timer, fahrenheit }                                    // 追加在末尾
+```
+`VerticalSwing.off` 的语义是 `kGreeSwingLastPos`（保持上次位置，不动摆叶）；UI 文案「关（保持当前位置）」。
+
+### 21.2 值对象与 API（均纯 Dart）
+```dart
+final class FahrenheitStep { const FahrenheitStep(this.f, this.c); final int f, c; }   // domain/fahrenheit_step.dart
+
+// AcCapabilities 新增（均有默认值，既有构造调用不破）
+final List<HorizontalSwing> horizontalSwings;      // 默认 const []
+final List<FahrenheitStep> fahrenheitSteps;        // 默认 const []，升序 f，f 唯一
+final int timerStepMinutes, maxTimerMinutes;       // 默认 0, 0 = 不支持；Gree = 30, 1440
+bool get supportsFahrenheit;                       // fahrenheitSteps.isNotEmpty
+int? fahrenheitFor(int c);                         // 同 c 的最小 f；无则 null
+int celsiusFor(int f);                             // f 最近的步（并列取小）的 c
+({int min, int max})? get fahrenheitRange;         // 当前（已受覆盖约束）步集合的 f 范围
+
+// AcState 新增
+int get timerRemainingMinutes(int nowMs);          // 仅展示用；不改状态
+AcState resolveTimer(int nowMs);                   // 见 §21.4
+bool get useFahrenheit => targetTempF != null;
+```
+`restrictedBy` 增补：`horizontalSwings` 去掉 `hiddenHSwings`（保留 off）；`fahrenheitSteps` 仅保留 `c ∈ [lo, hi]`（`lo/hi` 为已处理的有效温度范围）；`features` 与 `suppressedFeatures` 规则不变（含四个新特性）。`timerStepMinutes/maxTimerMinutes` 原样透传。
+
+### 21.3 `normalize` 完整顺序（v0.3.0，替换 §4.2 与 §12.4 的描述；幂等，`power` 不变；不依赖时钟）
+设 `rule = modeRules[mode]`，`enabled(f) = features ∋ f ∧ rule.allowedFeatures ∋ f`，`suppressed` 同 §12.4。
+1. `mode ∉ modes` → `modes.first`；取 `rule`。
+2. `fan`：`rule.fixedFan ?? (fan ∈ fanSpeeds ? fan : fanSpeeds.first)`。
+3. `verticalSwing ∉ verticalSwings` → `off`。
+4. **`horizontalSwing`**：`enabled(swingH) ∧ horizontalSwings ∋ h` ? h : `off`。
+5. **温度**：`fOn = targetTempF != null ∧ enabled(fahrenheit) ∧ supportsFahrenheit`。
+   - `fOn`：若 `rule.fixedTempC != null` → `F = fahrenheitFor(fixedC)`（自动模式 = 77），否则 `F` = 最近的有效步的 f（夹取到 `fahrenheitRange` 并吸附到表内值）；`targetTempC = celsiusFor(F)`；
+   - `¬fOn`：`targetTempF = null`；`targetTempC = rule.fixedTempC ?? clamp(targetTempC, minTempC, maxTempC)`。
+   - 送风模式（`tempEditable=false`）沿用状态值，仅做同样的夹取/吸附。
+6. 附加功能（沿用 v0.2）：`turbo/xfan/sleep/health = enabled ∧ value`；`light = suppressed ∋ light ∨ (enabled ∧ light)`；`tempDisplay = enabled ∧ ∈ tempDisplays ? v : off`。
+7. **`timer`**：`¬enabled(timer) ∨ maxTimerMinutes==0` → `(0, null)`；否则 `m = min(maxTimerMinutes, (timerMinutes ~/ step) * step)`，`m < step` → `(0, null)`；`m>0 ∧ timerSetAtMs==null` → `(0, null)`；`m==0` → `timerSetAtMs=null`。
+8. **`wifiPulse`** = `enabled(wifi) ∧ wifiPulse`。
+
+「中性值」对应关系（隐藏 ⇒）：`horizontalSwing=off`、`timer=0`、`wifiPulse=false`、`fahrenheit` ⇒ 摄氏（`targetTempF=null`，`targetTempC` 保持为由原华氏值派生的有效摄氏）。「模式不允许 ⇒ 关闭值」与此相同（Gree 所有模式都允许新四项）。
+
+### 21.4 `resolveTimer(nowMs)`（纯函数，由控制器在 normalize 之前调用）
+```
+if timerMinutes == 0 or timerSetAtMs == null: return copyWith(timerMinutes: 0, timerSetAtMs: null)
+remaining = timerMinutes - (nowMs - timerSetAtMs) / 60000          // 允许浮点
+if remaining <= 0: return copyWith(timerMinutes: 0, timerSetAtMs: null)         // 已到点，清除，不发码
+m = ceil(remaining / 30) * 30   (≤ 原 timerMinutes)
+return copyWith(timerMinutes: m, timerSetAtMs: nowMs)                            // 以“剩余”为新的设定
+```
+`nowMs < timerSetAtMs`（时钟回拨）按 `remaining = timerMinutes` 处理。`normalize` 不含时钟，保持纯。
+
+## 22. 协议层（Gree，v0.3.0）
+
+### 22.1 常量（`gree_constants.dart`）
+- 垂直扫风原生值显式映射：`off→0, auto→1, highest→2, high→3, middle→4, low→5, lowest→6, autoDown→7, autoMiddle→9, autoUp→11`；`SwingAuto` 位 = `{auto, autoDown, autoMiddle, autoUp}`。反向映射仅含这 10 个值，其余半字节解码为 `off`；**禁止** `VerticalSwing.values[nibble]`（v0.2 的 `.index` 写法在 7 项之外会错位，必须改掉）。
+- 水平扫风显式映射 `off→0 … maxRight→6`；解码 7 → `off`。
+- `greeFahrenheitTable`：26 行 `(f, c, extra)`，内容见 `docs/versions/0.3.0.md` §6；`f` 61..86 唯一。派生 `fahrenheitSteps = [for r in table FahrenheitStep(r.f, r.c)]` 传给 `AcCapabilities`（domain 看不到 `extra`）。
+- 定时：`step=30`、`max=1440`。
+
+### 22.2 `GreeStateCodec.encode` 新增部分
+```
+byte1 = tempNibble | halfHr<<4 | tensHr<<5 | timerEnabled<<7
+  tempNibble = (fOn ? row(F).c : targetTempC) - 16
+byte2 = timerUnits | turbo<<4 | light<<5 | modelA<<6 | xfan<<7
+byte3 = 0x50 | (fOn ? (row(F).extra<<2 | 1<<3) : 0)
+byte0.bit6 = verticalSwing ∈ swingAutoSet
+byte4 = nativeSwingV | nativeSwingH<<4
+byte5 = 0x20 | tempDisplay | wifiPulse<<6            // IFeel 恒 0
+byte7 = checksum<<4                                  // Econo 恒 0
+timer: m=timerMinutes; enabled=m>=30; hours=m~/60; half=(m%60)>=30; tens=hours~/10; units=hours%10
+```
+`encode` 的输入是**已归一化**状态；若 `targetTempF` 不在表内或 `timerMinutes` 非 30 的倍数，抛 `ArgumentError`（防御）。`decode(bytes)` 还原：`targetTempF = useF ? max(61, g(16+n)+extra) : null`（`g(c)=(9c+160)~/5`）、定时分钟 `= (tens*10+units)*60 + (half?30:0)`（`enabled` 为假则 0；`timerSetAtMs` 解码为 `0` 之外的哨兵时间无意义，测试中只断言分钟）、`horizontalSwing`、`verticalSwing`、`wifiPulse`；I‑Feel、Econo 位忽略。
+
+### 22.3 校验和不变
+公式不变（§5.3）。新字段对校验和的影响见 §5.3「校验和」列；`isValid` 对所有新向量必须为真。
+
+### 22.4 `GreeProtocol.capabilities`（三个变体一致，除 modes）
+`verticalSwings = VerticalSwing.values`（10 项）；`horizontalSwings = HorizontalSwing.values`（7 项）；`fahrenheitSteps` 来自表；`timerStepMinutes=30, maxTimerMinutes=1440`；`features = {turbo, light, xfan, sleep, tempDisplay, swingH, wifi, timer, fahrenheit}`；`common`（所有模式都允许的特性集）扩为 `{light, tempDisplay, swingH, wifi, timer, fahrenheit}`。自动模式 `fixedTempC=25`（华氏 77）。`pairingProbe` 不变（新字段取默认），三种探测帧字节与 v0.2 完全一致。
+
+### 22.5 `AcProtocol` 追加
+```dart
+CapabilityOverrides get recommendedOverrides;   // 默认隐藏种子，仅用于新建设备
+```
+`GreeProtocol`：`hiddenFeatures = {swingH, wifi, timer} ∪ (model == yx1fsf ? {} : {fahrenheit})`，`hiddenSwings = {autoDown, autoMiddle, autoUp}`，其余为空。迁移（§24）对已有设备使用更保守的固定超集（含 `fahrenheit`，不区分变体）。
+
+## 23. 应用层（v0.3.0）
+
+### 23.1 `RemoteController` 新增/变更
+```dart
+RemoteController({..., int Function()? nowMs});          // 默认 DateTime.now().millisecondsSinceEpoch
+Future<void> setHorizontalSwing(HorizontalSwing h);       // update(copyWith(horizontalSwing: h))
+Future<void> setUseFahrenheit(bool on);                   // on: targetTempF = capabilities.fahrenheitFor(targetTempC) ?? 77；off: targetTempF = null（targetTempC 取表内 c）；各发一帧
+Future<void> stepTemp(int delta);                         // 摄氏 ±1 °C；华氏 ±1 °F（targetTempF），边界由 normalize 吸附
+Future<void> setTimer(int minutes);                       // 0=取消；否则 (minutes, nowMs())
+Future<void> cycleTempDisplay();                          // 下一档（§20.3）
+Future<void> pressWifi();                                 // update(copyWith(wifiPulse: true))
+int? get timerRemainingMinutes;                           // 供 TimerChip；timer 未设置或已到点为 null
+```
+`toggleFeature` 的 `switch` 对 `swingH/wifi/timer/fahrenheit` 返回原状态（这些不是开关式特性；分别由上面的专用方法处理）；`setTempDisplay` 保留给测试/向后兼容，UI 不再调用。
+
+### 23.2 `update` 管线与一次性标记
+`next = capabilities.normalize(mutate(state).resolveTimer(nowMs()))`；与 v0.2 相同的“相等不发、乐观更新、落盘、合并发送”。
+**`wifiPulse` 清除规则**：`_drain` 取走并编码 `next` 后，若 `next.wifiPulse` 为真，则无论传输成功或失败，立即 `_state = _state.copyWith(wifiPulse: false)` **且** `_pending = _pending?.copyWith(wifiPulse: false)`（防止已合并的后继帧再次置位），然后 `notify`；不重发、不落盘（该字段本就不持久化）。若点击后、发送前又有别的修改，合并后的最新帧携带该标记并在发送后清除（只发一次）。
+**`init`**：`state = normalize(device.state.resolveTimer(nowMs()))`；定时到点被清除时回写 `saveState`，**不发码**。设置变更（`_onDevicesChanged`）仍是重新 normalize 且不发码。
+
+### 23.3 其他控制器
+- `DeviceListController.add(...)` 新增参数 `CapabilityOverrides overrides = CapabilityOverrides.none`；`AddDevicePage` 在创建模式传 `protocol.recommendedOverrides`（经 `AddDeviceWizardController` 完成事件携带，不在页面里直接引用 protocol）。repair 模式不改覆盖。
+- `DeviceSettingsController`：新增 `setHSwingVisible(HorizontalSwing, bool)`、`setAllHSwingVisible(bool)`（等价于 `setFeatureVisible(swingH,…)` 加位置全开）；`setFeatureVisible` 接受新四个特性；`setSwingVisible` 接受三个局部扫风。保护规则不变（模式/风速不可全隐藏）。
+
+## 24. 持久化 schema v3 与迁移
+
+### 24.1 键与格式
+| key | v0.3.0 |
+|---|---|
+| `app.schemaVersion` | `3`（最后写入） |
+| `device.index` | `{"v":3,"devices":[…]}`；overrides 新增 `hiddenHSwings` |
+| `device.state.<id>` | `AcState` JSON，`"v":2`；新键 `horizontalSwing`、`targetTempF`、`timerMinutes`、`timerSetAtMs`；**不含 `wifiPulse`** |
+旧 `device.state.*` 不被迁移器重写：读取缺键取默认（`horizontalSwing=off`、`targetTempF=null`、`timerMinutes=0`、`timerSetAtMs=null`），下一次 `saveState` 自然升级。
+
+### 24.2 `DeviceSchemaV3Migrator`（`infrastructure/persistence/device_schema_v3_migrator.dart`）
+`DeviceSchemaV3Migrator(SharedPreferences prefs)`，`Future<void> migrateIfNeeded()`，在 `LegacyV1Migrator` 之后由 `SharedPrefsDeviceRepository.load()` 调用：
+1. `schemaVersion` 为 int 且 `>= 3` → 返回（不触碰任何键）。
+2. 读 `device.index`：不存在 → （全新安装，或 v0.1 无数据）直接写 `schemaVersion=3`，返回。
+3. 非字符串 / 非 JSON / `devices` 非数组 → **不改任何键**（包括不写 schemaVersion），记 WARN，返回（`load()` 沿用 v0.2 的损坏备份逻辑）。
+4. 索引 `v >= 3`（缺省按 2）→ 只写 `schemaVersion=3`，返回（**不再并入种子**：用户可能已在 v0.3 中改过隐藏项）。
+5. 否则对 `devices` 中每个 Map 项：`overrides` 非 Map 视为 `{}`；`hiddenFeatures ∪= {swingH, wifi, timer, fahrenheit}`、`hiddenSwings ∪= {autoDown, autoMiddle, autoUp}`（保持数组去重，保留未知键与其它字段，非 Map 项原样保留）；顶层 `v=3`；写回 `device.index`。
+6. 写 `app.schemaVersion=3`（最后）。
+- **幂等 / 可恢复**：步骤 5 为集合并集；若在 5 与 6 之间崩溃，重启走步骤 4（只补写 schema）；若写 index 本身失败，schema 未提交，下次重试。
+- **零丢失**：设备数、顺序、名称、协议、`pairingConfirmed`、已有隐藏项、全部 `device.state.*` 均不变。
+- 串联：v0.1 → `LegacyV1Migrator`（写 `v:2` 索引与 `schema=2`）→ `DeviceSchemaV3Migrator`（并入种子，写 `v:3` 与 `schema=3`），一次启动完成。
+- 降级：见 `docs/versions/0.3.0.md` §9。
+
+## 25. 分层与 import 规则（v0.3.0）
+分层规则（§2）不变。新增文件的归属：`domain/fahrenheit_step.dart`（零外部依赖）；`protocol/gree/*` 持有华氏表与原生值表；`infrastructure/persistence/device_schema_v3_migrator.dart`；`application` 不 import Flutter（时钟以 `int Function()` 注入）；`presentation` 的新 widget 只经 `RemoteController`/`DeviceSettingsController` 取数，不 import `protocol/`、`infrastructure/`。
+`architecture_test` 新增断言：①`device_schema_v3_migrator.dart` 只能被 `infrastructure/` 内文件 import；②`lib/domain/` 下任何文件不 import `protocol/`（华氏表不得出现在 domain，domain 只见 `FahrenheitStep`）；③`gree_*` 文件之外不出现 `greeFahrenheitTable`；其余既有规则（add_device_wizard 纯净、presentation 不碰 protocol/infrastructure）保持。
+
+## 26. 测试、里程碑与完成定义（v0.3.0）
+
+### 26.1 测试清单
+向量全文与分类（`reference` / `reference-decode` / `derived`）见 `docs/versions/0.3.0.md` §10。文件级清单：
+| 文件 | 要点 |
+|---|---|
+| `test/support/gree_vectors.dart`（改） | 增 `provenance`；新增 reference：`fahrenheit-63-ybofb`、`econo-77f-yx1fsf`（升级为 encode）、`raw-flags`；reference-decode：wifi/ifeel 旧帧；derived：水平扫风 ×6、局部垂直 ×3、wifi-pulse、定时 ×6、华氏 61/70/79/86、auto-77f |
+| `test/protocol/gree_state_codec_test.dart`（改） | 全部向量 encode/decode/往返；v0.2 向量在新默认值下逐字节不变；保留位/常量位属性测试；原生值显式表（禁止 index）；解码 8/10/12–15 → off；I‑Feel/Econo 位恒 0 且解码被忽略；定时算法表（`TestGreeClass.Timer`） |
+| `test/protocol/gree_fahrenheit_test.dart`（新） | 26 行逐行；`getTemp` 公式往返；与上游整数算法一致（70、79 除外）；C↔F 往返恒等；范围覆盖推导 |
+| `test/protocol/gree_protocol_test.dart`（改） | 新能力声明；`recommendedOverrides`（YX1FSF 不含 `fahrenheit`）；探测帧字节不变 |
+| `test/domain/ac_state_test.dart`、`capability_overrides_test.dart`、`ac_capabilities_test.dart`、`capability_explainer_test.dart`（改） | 新字段 JSON/容错、`hiddenHSwings`、`restrictedBy` 交集与有效⊆协议属性、§21.3 逐步归一化与幂等、`resolveTimer`（取整/过期/回拨）、explainer 新项 |
+| `test/infrastructure/device_schema_v3_migrator_test.dart`（新） | §24.2 各分支逐条（含 v1→v3 串联、`v:3` 未提交 schema、损坏索引不动、二次运行零写入、不重写 state） |
+| `test/infrastructure/shared_prefs_device_repository_test.dart`（改） | 新 JSON 往返；读取 v0.2 数据 |
+| `test/application/remote_controller_test.dart`（改） | 隐藏 swingH 帧与 v0.2 相同；pressWifi 一次性（含合并/失败/快速连点）；定时折算与过期（注入时钟）；华氏步进与单位切换；`cycleTempDisplay`；设置变更不发码 |
+| `test/application/device_list_controller_test.dart`、`device_settings_controller_test.dart`、`add_device_wizard_controller_test.dart`（改） | `add(overrides)`；新开关；新建设备应用 `recommendedOverrides`，repair 不改覆盖 |
+| `test/presentation/remote_page_test.dart`、`device_settings_page_test.dart`、`control_help_sheet_test.dart`、`home_page_test.dart`（改） | 默认隐藏/放开后显隐、点选后帧 hex、温度显示为按钮、℉、定时、Wi‑Fi 按钮、设置行、说明（含 I‑Feel）、版本文案 |
+| `test/architecture_test.dart`、`test/version_test.dart`（改） | §25 与版本 0.3.0（pubspec、`AppConstants.version`、`android/app/build.gradle`、README、`docs/versions/0.3.0.md`、`v0.3.0 变更`） |
+
+### 26.2 里程碑
+| # | 里程碑 | 产出 |
+|---|---|---|
+| M14 | 领域 | 新枚举、`FahrenheitStep`、`AcState` 新字段 + `resolveTimer`、`AcCapabilities` 新字段/`restrictedBy`/`normalize`（§21.3）、`CapabilityOverrides.hiddenHSwings`、explainer + domain 测试 |
+| M15 | 协议 | Gree 原生值表与华氏表、codec 编解码新字段、能力声明、`recommendedOverrides`、新向量与测试（先让 reference 向量全绿，再 derived） |
+| M16 | 基础设施 | `DeviceSchemaV3Migrator`、仓库串联、schema=3、测试 |
+| M17 | 应用层 | `RemoteController` 新方法/时钟/一次性标记、`DeviceListController.add(overrides)`、设置控制器、向导种子、测试 |
+| M18 | 表现层 | 水平扫风行、℃/℉ 切换、定时 chip + sheet、Wi‑Fi 按钮、温度显示「下一档」、设置页新行、按钮说明、`strings.dart` + widget 测试 |
+| M19 | 收尾 | 版本 0.3.0（`pubspec.yaml`、`AppConstants.version`、`android/app/build.gradle`、`version_test`、`home_page_test`、README、plan）、架构测试、analyze / test / release APK |
+
+### 26.3 完成定义（0.3.0）
+1. `flutter analyze` 零问题；`flutter test` 全绿，含 §26.1 全部用例；v0.2 全部既有测试保持通过（必要处按新签名改写）。
+2. v0.2→v0.3 升级：设备与状态零丢失、隐藏项保留并并入种子、启动不发码、二次启动不重复迁移；全新安装无设备。
+3. 默认（种子隐藏）下遥控页与 v0.2 外观一致，且所有帧与 v0.2 逐字节相同；设置里打开后水平扫风、局部垂直扫风、℃/℉、定时、Wi‑Fi 按钮出现并发出 `docs/versions/0.3.0.md` §10.1 的帧。
+4. 温度显示为「下一档」按钮；I‑Feel 在按钮说明中有“不支持及原因”。
+5. 版本 0.3.0 在 pubspec / 常量 / gradle / README / 文档 / 测试一致；架构测试通过。
+6. 真机验收（带红外的 Android 手机 + 实际格力空调）：水平扫风/局部扫风/定时/Wi‑Fi/华氏的实际反应需逐项确认并回填结果（这些帧无上游实机向量）。
+
+### 26.4 已知风险与待验证
+- 水平/局部扫风、定时、Wi‑Fi 位的帧均为按 `union GreeProtocol` 推导，无上游实机向量；默认隐藏即为此保守。
+- 定时开/关语义由空调按电源状态解释，向上取整最多多 29 分钟。
+- 华氏表 70、79 两行偏离上游浮点 `setTemp`（以显示正确为准），待真机核对。
+- 将来若上游补充测温报文或 Econo 位实机帧，再重新评估 I‑Feel / Econo 位（只需改 codec 一行与能力声明）。

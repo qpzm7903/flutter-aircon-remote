@@ -24,6 +24,19 @@
 - [x] M12：表现层——首页列表（空状态/增删改/排序）、添加空调向导、设备设置、按钮说明、遥控页去掉协议下拉。
 - [x] M13：收尾——版本 0.2.0（pubspec / 常量 / README / version_test）、架构测试更新、analyze / test / release APK 验收。
 
+## v0.3.0（仅设计，未实现；详见 docs/versions/0.3.0.md 与 architecture §20–§26）
+
+范围：Gree 水平扫风（按设备可隐藏，默认隐藏）+ 协议缺口补全（局部垂直扫风、华氏度、定时、Wi‑Fi 一次性键、温度显示循环顺序），schema v3 迁移。仍只做 Gree。跳过：I‑Feel、Econo 位、health。
+
+- [ ] M14：领域——新枚举（`HorizontalSwing`、`VerticalSwing` 局部扫风、`AcFeature.swingH/wifi/timer/fahrenheit`）、`FahrenheitStep`、`AcState` 新字段与 `resolveTimer`、`AcCapabilities` 新字段/`normalize`、`CapabilityOverrides.hiddenHSwings`、explainer。
+- [ ] M15：协议——原生值显式表、华氏表、codec 新字段、能力声明、`recommendedOverrides`、reference + derived 向量。
+- [ ] M16：基础设施——`DeviceSchemaV3Migrator`、仓库串联、schema=3。
+- [ ] M17：应用层——`RemoteController`（时钟、定时折算、wifiPulse 一次性、华氏、`cycleTempDisplay`）、`DeviceListController.add(overrides)`、设置控制器、向导种子。
+- [ ] M18：表现层——水平扫风行、℃/℉、定时、Wi‑Fi 按钮、温度显示「下一档」、设置页与按钮说明、字符串。
+- [ ] M19：收尾——版本 0.3.0（pubspec、`AppConstants.version`、`android/app/build.gradle`、`version_test`、`home_page_test`、README 当前版本）、架构测试、analyze / test / release APK 验收、真机回填。
+
+说明：设计阶段为保持现有 `version_test` 通过，代码内版本串仍是 0.2.0，统一在 M19 一次性改为 0.3.0。
+
 ## 本地验收结果（2026-10-18）
 
 - `flutter pub get` 成功。
