@@ -12,7 +12,7 @@ class SwingSelector extends StatelessWidget {
     final data = context.select<RemoteController, (VerticalSwing, String)>(
       (c) => (c.state.verticalSwing, c.protocol.id),
     );
-    final c = context.read<RemoteController>();
+    final c = context.watch<RemoteController>();
     if (c.capabilities.verticalSwings.isEmpty) {
       return const SizedBox.shrink();
     }

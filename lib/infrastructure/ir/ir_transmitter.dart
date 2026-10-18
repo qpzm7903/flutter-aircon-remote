@@ -1,14 +1,7 @@
 import '../../domain/ir_frame.dart';
 
-enum IrErrorCode {
-  noIrEmitter,
-  invalidArgument,
-  patternTooLong,
-  unsupportedFrequency,
-  permissionDenied,
-  transmitFailed,
-  platform,
-}
+import '../../domain/ir_error_code.dart';
+export '../../domain/ir_error_code.dart';
 
 class IrTransmitException implements Exception {
   const IrTransmitException(this.code, this.message);

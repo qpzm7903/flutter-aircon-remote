@@ -18,6 +18,17 @@ void main() {
           expect(condition, false, reason: '${file.path} -> $uri');
         }
 
+        forbids(uri.startsWith('package:flutter_aircon_remote/'));
+        if (target.endsWith('/legacy_v1_migrator.dart')) {
+          forbids(layer != 'infrastructure');
+        }
+        if (file.path.endsWith('/add_device_wizard.dart')) {
+          forbids(
+            uri.startsWith('package:flutter') ||
+                uri == 'dart:io' ||
+                target.contains('/infrastructure/'),
+          );
+        }
         if (layer == 'domain') {
           forbids(
             uri.startsWith('package:') ||
@@ -68,6 +79,7 @@ void main() {
               ![
                 '/ir_transmitter.dart',
                 '/remote_repository.dart',
+                '/device_repository.dart',
                 '/log_service.dart',
               ].any(target.endsWith),
             );

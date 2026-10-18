@@ -77,3 +77,39 @@ final greeVectors = [
     [0x4C, 0x04, 0x60, 0x50, 0x01, 0x02, 0x00, 0xA0],
   ),
 ];
+
+// Issue1821EnergySaver: upstream Fahrenheit capture 1D096058002000A0.
+// Celsius equivalent; the power-off vector is derived, not a captured frame.
+final yx1fsfVectors = [
+  GreeVector(
+    'econo-on-yx1fsf',
+    GreeModel.yx1fsf,
+    const AcState.initial().copyWith(
+      power: true,
+      mode: AcMode.econo,
+      targetTempC: 25,
+      fan: FanSpeed.low,
+    ),
+    [0x1D, 0x09, 0x60, 0x50, 0, 0x20, 0, 0x20],
+  ),
+  GreeVector(
+    'econo-off-yx1fsf-derived',
+    GreeModel.yx1fsf,
+    const AcState.initial().copyWith(
+      mode: AcMode.econo,
+      targetTempC: 25,
+      fan: FanSpeed.low,
+    ),
+    [0x15, 0x09, 0x20, 0x50, 0, 0x20, 0, 0xA0],
+  ),
+  GreeVector('cool-on-yx1fsf', GreeModel.yx1fsf, greeVectors[2].state, [
+    0x59,
+    0x07,
+    0x60,
+    0x50,
+    1,
+    0x20,
+    0,
+    0xC0,
+  ]),
+];

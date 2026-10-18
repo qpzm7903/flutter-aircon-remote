@@ -1,24 +1,32 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
-import 'application/remote_controller.dart';
+import 'application/device_list_controller.dart';
+import 'application/remote_session_factory.dart';
+import 'application/diagnostics_controller.dart';
 import 'application/theme_controller.dart';
 import 'presentation/theme/app_theme.dart';
-import 'presentation/pages/remote_page.dart';
+import 'presentation/pages/home_page.dart';
 import 'presentation/strings.dart';
 
 class AircondRemoteApp extends StatelessWidget {
   const AircondRemoteApp({
-    required this.remoteController,
+    required this.devices,
+    required this.sessions,
+    required this.diagnostics,
     required this.themeController,
     super.key,
   });
-  final RemoteController remoteController;
+  final DeviceListController devices;
+  final RemoteSessionFactory sessions;
+  final DiagnosticsController diagnostics;
   final ThemeController themeController;
   @override
   Widget build(BuildContext context) => MultiProvider(
     providers: [
-      ChangeNotifierProvider.value(value: remoteController),
+      ChangeNotifierProvider.value(value: devices),
+      Provider.value(value: sessions),
+      Provider.value(value: diagnostics),
       ChangeNotifierProvider.value(value: themeController),
     ],
     child: Consumer<ThemeController>(
@@ -32,7 +40,7 @@ class AircondRemoteApp extends StatelessWidget {
           'dark' => ThemeMode.dark,
           _ => ThemeMode.system,
         },
-        home: const RemotePage(),
+        home: const HomePage(),
       ),
     ),
   );

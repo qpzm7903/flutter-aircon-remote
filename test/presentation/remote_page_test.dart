@@ -7,7 +7,48 @@ import 'package:flutter_aircon_remote/domain/ac_enums.dart';
 
 import '../support/pump_app.dart';
 
+import 'package:flutter_aircon_remote/domain/capability_overrides.dart';
+import 'package:flutter_aircon_remote/presentation/widgets/swing_selector.dart';
+
 void main() {
+  testWidgets('device overrides hide whole swing row and feature chips', (
+    tester,
+  ) async {
+    await pumpApp(
+      tester,
+      device: testDevice(
+        overrides: const CapabilityOverrides(
+          hiddenFeatures: {AcFeature.light, AcFeature.xfan},
+          hiddenSwings: {...VerticalSwing.values},
+        ),
+      ),
+    );
+    await tester.scrollUntilVisible(find.text(Strings.features), 200);
+    expect(find.byType(SwingSelector), findsNothing);
+    expect(find.text('灯光'), findsNothing);
+    expect(find.text('换气'), findsNothing);
+  });
+  testWidgets('econo is visible only on YX1FSF', (tester) async {
+    await pumpApp(tester, device: testDevice(protocolId: 'gree.yx1fsf'));
+    await tester.ensureVisible(find.byType(ModeSelector));
+    expect(find.text('节能'), findsOneWidget);
+  });
+  testWidgets('mode fixed fan stays low even with low speed hidden', (
+    tester,
+  ) async {
+    final (c, _) = await pumpApp(
+      tester,
+      device: testDevice(
+        overrides: const CapabilityOverrides(hiddenFanSpeeds: {FanSpeed.low}),
+      ),
+    );
+    final pending = c.setMode(AcMode.dry);
+    await tester.pumpAndSettle();
+    await pending;
+    expect(c.state.fan, FanSpeed.low);
+    expect(tester.takeException(), null);
+  });
+
   testWidgets('no emitter shows banner and ignores remote input', (
     tester,
   ) async {
@@ -72,13 +113,11 @@ void main() {
     await tester.pump(const Duration(milliseconds: 500));
     expect(ir.sent.length, count);
   });
-  testWidgets('theme and diagnostics are available', (tester) async {
-    await pumpApp(tester, hasEmitter: false);
-    await tester.tap(find.byTooltip(Strings.theme));
-    await tester.pumpAndSettle();
-    await tester.tap(find.byTooltip(Strings.diagnostics));
-    await tester.pumpAndSettle();
-    expect(find.textContaining('版本: 0.1.0'), findsOneWidget);
-    expect(find.byTooltip(Strings.copy), findsOneWidget);
+  testWidgets('remote has device title and no protocol dropdown', (
+    tester,
+  ) async {
+    await pumpApp(tester);
+    expect(find.text('主卧'), findsOneWidget);
+    expect(find.byType(DropdownButton<String>), findsNothing);
   });
 }

@@ -8,7 +8,8 @@ import '../domain/ac_enums.dart';
 import '../protocol/ac_protocol.dart';
 import '../protocol/protocol_registry.dart';
 import '../infrastructure/ir/ir_transmitter.dart';
-import '../infrastructure/persistence/remote_repository.dart';
+import '../domain/ac_device.dart';
+import 'device_list_controller.dart';
 import '../infrastructure/logging/log_service.dart';
 import 'remote_event.dart';
 
@@ -16,32 +17,56 @@ enum IrAvailability { unknown, available, unavailable }
 
 class RemoteController extends ChangeNotifier {
   RemoteController({
+    required this.deviceId,
     required this.registry,
     required this._transmitter,
-    required this._repository,
+    required this._devices,
   }) {
-    _protocol = registry.fallback;
-    _state = _protocol.defaultState;
+    _lastDevice = device;
+    _state = capabilities.normalize(device.state);
+    _devices.addListener(_onDevicesChanged);
   }
+  final String deviceId;
   final AcProtocolRegistry registry;
   final IrTransmitter _transmitter;
-  final RemoteRepository _repository;
-  late AcProtocol _protocol;
+  final DeviceListController _devices;
+  late AcDevice _lastDevice;
+  AcDevice get device => _devices.byId(deviceId) ?? _lastDevice;
+  String get title => device.name;
+  AcProtocol get protocol =>
+      registry.byId(device.protocolId) ?? registry.fallback;
   late AcState _state;
-  AcProtocol get protocol => _protocol;
   AcState get state => _state;
-  AcCapabilities get capabilities => protocol.capabilities;
+  AcCapabilities get capabilities =>
+      protocol.capabilities.restrictedBy(device.overrides);
+  void _onDevicesChanged() {
+    if (_disposed) return;
+    final next = _devices.byId(deviceId);
+    if (next == null) {
+      _removed = true;
+      _pending = null;
+      _events.add(DeviceRemoved());
+      return;
+    }
+    if (next.protocolId != _lastDevice.protocolId ||
+        next.overrides != _lastDevice.overrides) {
+      _pending = null;
+      _state = capabilities.normalize(_state);
+      _devices.saveState(deviceId, _state);
+    }
+    _lastDevice = next;
+    _notify();
+  }
+
   IrAvailability _availability = IrAvailability.unknown;
   IrAvailability get irAvailability => _availability;
-  bool _sending = false, _disposed = false;
+  bool _sending = false, _disposed = false, _removed = false;
   bool get isSending => _sending;
   final _events = StreamController<RemoteEvent>.broadcast();
   Stream<RemoteEvent> get events => _events.stream;
-  final Map<String, AcState> _states = {};
   AcState? _pending;
   AcProtocol? _pendingProtocol;
   Future<void>? _drainFuture;
-  Future<void> _persistenceFuture = Future.value();
   void _notify() {
     if (!_disposed) {
       notifyListeners();
@@ -49,20 +74,7 @@ class RemoteController extends ChangeNotifier {
   }
 
   Future<void> init() async {
-    try {
-      final saved = await _repository.load();
-      _states.addAll(saved.states);
-      _protocol = registry.byId(saved.protocolId ?? '') ?? registry.fallback;
-      if (saved.protocolId != null &&
-          registry.byId(saved.protocolId!) == null) {
-        LogService.warning('Unknown protocol: ${saved.protocolId}');
-      }
-      _state = capabilities.normalize(
-        _states[protocol.id] ?? protocol.defaultState,
-      );
-    } catch (e) {
-      LogService.warning('State load failed', e);
-    }
+    _state = capabilities.normalize(device.state);
     await recheckIr();
   }
 
@@ -81,18 +93,8 @@ class RemoteController extends ChangeNotifier {
     _notify();
   }
 
-  Future<void> _persist(Future<void> Function() action) {
-    return _persistenceFuture = _persistenceFuture.then((_) async {
-      try {
-        await action();
-      } catch (e) {
-        LogService.warning('Persistence failed', e);
-      }
-    });
-  }
-
   Future<void> update(AcState Function(AcState s) mutate) async {
-    if (_disposed || _availability == IrAvailability.unavailable) {
+    if (_disposed || _removed || _availability == IrAvailability.unavailable) {
       return;
     }
     final next = capabilities.normalize(mutate(state));
@@ -100,10 +102,8 @@ class RemoteController extends ChangeNotifier {
       return;
     }
     _state = next;
-    _states[protocol.id] = next;
+    _devices.saveState(deviceId, next);
     _notify();
-    final id = protocol.id;
-    unawaited(_persist(() => _repository.saveState(id, next)));
     _pending = next;
     _pendingProtocol = protocol;
     if (!_sending) {
@@ -116,14 +116,14 @@ class RemoteController extends ChangeNotifier {
     _sending = true;
     _notify();
     try {
-      while (_pending != null && !_disposed) {
+      while (_pending != null && !_disposed && !_removed) {
         final next = _pending!;
         final encoder = _pendingProtocol!;
         _pending = null;
         try {
           final frame = encoder.encode(next);
           LogService.info(
-            '${encoder.id} | ${frame.debugHex} | ${frame.patternMicros.length} | ${frame.totalMicros / 1000}ms',
+            '$deviceId | ${encoder.id} | ${frame.debugHex} | ${frame.patternMicros.length} | ${frame.totalMicros / 1000}ms',
           );
           await _transmitter.transmit(frame);
           LogService.info('Transmit succeeded');
@@ -144,20 +144,6 @@ class RemoteController extends ChangeNotifier {
       _sending = false;
       _notify();
     }
-  }
-
-  Future<void> setProtocol(String protocolId) async {
-    final next = registry.byId(protocolId);
-    if (next == null || next.id == protocol.id || _disposed) {
-      return;
-    }
-    _pending = null;
-    _states[protocol.id] = state;
-    _protocol = next;
-    _state = capabilities.normalize(_states[next.id] ?? next.defaultState);
-    _notify();
-    LogService.info('Protocol: ${next.id}');
-    await _persist(() => _repository.saveProtocolId(next.id));
   }
 
   Future<void> togglePower() => update((s) => s.copyWith(power: !s.power));
@@ -183,10 +169,9 @@ class RemoteController extends ChangeNotifier {
       AcFeature.tempDisplay => s,
     },
   );
-  List<String> logSnapshot([int n = 200]) => LogService.getRecentLogs(n);
-  String logFilePath() => LogService.getLogFilePath();
   @override
   void dispose() {
+    _devices.removeListener(_onDevicesChanged);
     _disposed = true;
     _pending = null;
     unawaited(_events.close());

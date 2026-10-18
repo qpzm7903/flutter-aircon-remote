@@ -3,12 +3,15 @@ import 'dart:typed_data';
 import '../../domain/ac_state.dart';
 import '../../domain/ac_enums.dart';
 
-enum GreeModel { yaw1f, ybofb }
+enum GreeModel { yaw1f, ybofb, yx1fsf }
 
 final class GreeStateCodec {
   const GreeStateCodec(this.model);
   final GreeModel model;
   Uint8List encode(AcState s) {
+    if (s.mode == AcMode.econo && model != GreeModel.yx1fsf) {
+      throw ArgumentError('Unsupported econo');
+    }
     final b = Uint8List.fromList([
       s.mode.index |
           (s.power ? 8 : 0) |
@@ -18,7 +21,7 @@ final class GreeStateCodec {
       s.targetTempC - 16,
       (s.turbo ? 16 : 0) |
           (s.light ? 32 : 0) |
-          (s.power && model == GreeModel.yaw1f ? 64 : 0) |
+          (s.power && model != GreeModel.ybofb ? 64 : 0) |
           (s.xfan ? 128 : 0),
       0x50,
       s.verticalSwing.index,
@@ -36,7 +39,10 @@ final class GreeStateCodec {
     }
     return const AcState.initial().copyWith(
       power: b[0] & 8 != 0,
-      mode: AcMode.values[(b[0] & 7) < 5 ? b[0] & 7 : 0],
+      mode:
+          AcMode.values[(b[0] & 7) < (model == GreeModel.yx1fsf ? 6 : 5)
+              ? b[0] & 7
+              : 0],
       targetTempC: 16 + (b[1] & 15),
       fan: FanSpeed.values[(b[0] >> 4) & 3],
       turbo: b[2] & 16 != 0,

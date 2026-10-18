@@ -6,10 +6,9 @@ import 'package:provider/provider.dart';
 
 import '../../application/remote_controller.dart';
 import '../../application/remote_event.dart';
-import '../../application/theme_controller.dart';
 import '../strings.dart';
-import 'diagnostics_sheet.dart';
-import '../widgets/brand_selector.dart';
+import 'device_settings_page.dart';
+import 'control_help_sheet.dart';
 import '../widgets/no_ir_banner.dart';
 import '../widgets/power_button.dart';
 import '../widgets/temperature_display.dart';
@@ -31,6 +30,12 @@ class _RemotePageState extends State<RemotePage> {
     super.initState();
     _subscription = context.read<RemoteController>().events.listen((event) {
       if (!mounted) {
+        return;
+      }
+      if (event is DeviceRemoved) {
+        Navigator.popUntil(context, (route) => route.isFirst);
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text(Strings.deviceRemoved)));
         return;
       }
       if (event is TransmitSucceeded) {
@@ -55,32 +60,38 @@ class _RemotePageState extends State<RemotePage> {
     final availability = context.select<RemoteController, IrAvailability>(
       (c) => c.irAvailability,
     );
-    final theme = context.select<ThemeController, String>((c) => c.modeName);
     final sending = context.select<RemoteController, bool>((c) => c.isSending);
     return Scaffold(
       appBar: AppBar(
-        title: const BrandSelector(),
+        title: Text(context.watch<RemoteController>().title),
         actions: [
           IconButton(
-            tooltip: Strings.theme,
-            onPressed: context.read<ThemeController>().cycle,
-            icon: Icon(switch (theme) {
-              'light' => Icons.light_mode,
-              'dark' => Icons.dark_mode,
-              _ => Icons.brightness_auto,
-            }),
+            tooltip: Strings.helpTitle,
+            icon: const Icon(Icons.help_outline),
+            onPressed: () {
+              final c = context.read<RemoteController>();
+              showModalBottomSheet<void>(
+                context: context,
+                isScrollControlled: true,
+                builder: (_) => ControlHelpSheet(
+                  protocol: c.protocol.capabilities,
+                  overrides: c.device.overrides,
+                  state: c.state,
+                ),
+              );
+            },
           ),
           IconButton(
-            tooltip: Strings.diagnostics,
-            onPressed: () => showModalBottomSheet<void>(
-              context: context,
-              isScrollControlled: true,
-              builder: (_) => ChangeNotifierProvider.value(
-                value: context.read<RemoteController>(),
-                child: const DiagnosticsSheet(),
+            tooltip: Strings.settingsTitle,
+            icon: const Icon(Icons.tune),
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute<void>(
+                builder: (_) => DeviceSettingsPage(
+                  deviceId: context.read<RemoteController>().deviceId,
+                ),
               ),
             ),
-            icon: const Icon(Icons.info_outline),
           ),
         ],
       ),
@@ -104,20 +115,38 @@ class _RemotePageState extends State<RemotePage> {
                             opacity: availability == IrAvailability.unavailable
                                 ? .4
                                 : 1,
-                            child: const Column(
+                            child: Column(
                               crossAxisAlignment: CrossAxisAlignment.stretch,
                               children: [
-                                TemperatureDisplay(),
-                                SizedBox(height: 16),
-                                PowerButton(),
-                                SizedBox(height: 24),
-                                ModeSelector(),
-                                SizedBox(height: 20),
-                                FanSelector(),
-                                SizedBox(height: 20),
-                                SwingSelector(),
-                                SizedBox(height: 20),
-                                FeatureToggles(),
+                                const TemperatureDisplay(),
+                                const SizedBox(height: 16),
+                                const PowerButton(),
+                                const SizedBox(height: 24),
+                                if (context
+                                        .watch<RemoteController>()
+                                        .capabilities
+                                        .modes
+                                        .length >
+                                    1)
+                                  const ModeSelector(),
+                                const SizedBox(height: 20),
+                                if (context
+                                        .watch<RemoteController>()
+                                        .capabilities
+                                        .fanSpeeds
+                                        .length >
+                                    1)
+                                  const FanSelector(),
+                                const SizedBox(height: 20),
+                                if (context
+                                        .watch<RemoteController>()
+                                        .capabilities
+                                        .verticalSwings
+                                        .length >
+                                    1)
+                                  const SwingSelector(),
+                                const SizedBox(height: 20),
+                                const FeatureToggles(),
                               ],
                             ),
                           ),

@@ -1,4 +1,4 @@
-enum AcMode { auto, cool, dry, fan, heat }
+enum AcMode { auto, cool, dry, fan, heat, econo }
 
 enum FanSpeed { auto, low, medium, high }
 

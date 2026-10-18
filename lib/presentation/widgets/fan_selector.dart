@@ -12,7 +12,7 @@ class FanSelector extends StatelessWidget {
     final selected = context.select<RemoteController, (FanSpeed, String)>(
       (c) => (c.state.fan, c.protocol.id),
     );
-    final c = context.read<RemoteController>();
+    final c = context.watch<RemoteController>();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -27,7 +27,10 @@ class FanSelector extends StatelessWidget {
                   (v) => ButtonSegment(value: v, label: Text(Strings.fans[v]!)),
                 )
                 .toList(),
-            selected: {selected.$1},
+            emptySelectionAllowed: true,
+            selected: c.capabilities.fanSpeeds.contains(selected.$1)
+                ? {selected.$1}
+                : {},
             onSelectionChanged: c.capabilities.canEditFan(c.state)
                 ? (s) => c.setFan(s.first)
                 : null,

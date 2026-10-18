@@ -10,7 +10,33 @@ import 'package:flutter_aircon_remote/domain/ac_state.dart';
 import '../support/gree_vectors.dart';
 
 void main() {
-  for (final v in greeVectors) {
+  test(
+    'raw Fahrenheit econo decodes and validates; old variants reject econo',
+    () {
+      final bytes = Uint8List.fromList([0x1D, 9, 0x60, 0x58, 0, 0x20, 0, 0xA0]);
+      final s = const GreeStateCodec(GreeModel.yx1fsf).decode(bytes);
+      expect(s.mode, AcMode.econo);
+      expect(s.power, true);
+      expect(s.light, true);
+      expect(s.fan, FanSpeed.low);
+      expect(GreeStateCodec.isValid(bytes), true);
+      for (final m in [GreeModel.yaw1f, GreeModel.ybofb]) {
+        expect(() => GreeStateCodec(m).encode(s), throwsArgumentError);
+        expect(GreeStateCodec(m).decode(bytes).mode, AcMode.auto);
+      }
+    },
+  );
+  test('YX1FSF and YAW1F agree on all non-econo samples', () {
+    for (final v in greeVectors) {
+      final s = GreeProtocol(GreeModel.yaw1f).capabilities.normalize(v.state);
+      expect(
+        const GreeStateCodec(GreeModel.yx1fsf).encode(s),
+        const GreeStateCodec(GreeModel.yaw1f).encode(s),
+      );
+    }
+  });
+
+  for (final v in [...greeVectors, ...yx1fsfVectors]) {
     test('decode reference ${v.name}', () {
       expect(
         GreeStateCodec(v.model).decode(Uint8List.fromList(v.bytes)),

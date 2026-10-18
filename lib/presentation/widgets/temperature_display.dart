@@ -25,7 +25,7 @@ class TemperatureDisplay extends StatelessWidget {
             c.state.power,
           ),
         );
-    final c = context.read<RemoteController>();
+    final c = context.watch<RemoteController>();
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(20),

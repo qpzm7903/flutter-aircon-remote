@@ -5,7 +5,10 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'app.dart';
 import 'core/constants.dart';
-import 'application/remote_controller.dart';
+import 'application/device_list_controller.dart';
+import 'application/remote_session_factory.dart';
+import 'application/diagnostics_controller.dart';
+import 'infrastructure/persistence/shared_prefs_device_repository.dart';
 import 'application/theme_controller.dart';
 import 'infrastructure/ir/fake_ir_transmitter.dart';
 import 'infrastructure/ir/method_channel_ir_transmitter.dart';
@@ -27,20 +30,34 @@ Future<void> main() async {
     return true;
   };
   LogService.info('${AppConstants.appName} ${AppConstants.version}');
-  final repository = SharedPrefsRemoteRepository(
-    await SharedPreferences.getInstance(),
-  );
-  final remote = RemoteController(
-    registry: AcProtocolRegistry([
-      GreeProtocol(GreeModel.yaw1f),
-      GreeProtocol(GreeModel.ybofb),
-    ]),
-    transmitter: const bool.fromEnvironment('FAKE_IR')
-        ? FakeIrTransmitter()
-        : const MethodChannelIrTransmitter(),
-    repository: repository,
+  final prefs = await SharedPreferences.getInstance();
+  final repository = SharedPrefsRemoteRepository(prefs);
+  final registry = AcProtocolRegistry([
+    for (final model in GreeModel.values) GreeProtocol(model),
+  ]);
+  final transmitter = const bool.fromEnvironment('FAKE_IR')
+      ? FakeIrTransmitter()
+      : const MethodChannelIrTransmitter();
+  final devices = DeviceListController(
+    registry: registry,
+    repository: SharedPrefsDeviceRepository(
+      prefs,
+      fallbackProtocolId: registry.fallback.id,
+    ),
   );
   final theme = ThemeController(repository);
-  runApp(AircondRemoteApp(remoteController: remote, themeController: theme));
-  await Future.wait([remote.init(), theme.init()]);
+  final sessions = RemoteSessionFactory(
+    registry: registry,
+    transmitter: transmitter,
+    devices: devices,
+  );
+  runApp(
+    AircondRemoteApp(
+      devices: devices,
+      sessions: sessions,
+      diagnostics: DiagnosticsController(),
+      themeController: theme,
+    ),
+  );
+  await Future.wait([devices.init(), theme.init()]);
 }

@@ -18,12 +18,27 @@ class GreeProtocol implements AcProtocol {
   String get brandName => '格力 Gree';
   @override
   String get modelName => model.name.toUpperCase();
+  @override
+  String get modelNote => switch (model) {
+    GreeModel.yaw1f => '常见格力遥控编码',
+    GreeModel.ybofb => '另一种格力遥控编码，电源位不同',
+    GreeModel.yx1fsf => '类似 YAW1F，另有“节能（Econo）”模式；Soleus Air 窗机等',
+  };
+  @override
+  AcState get pairingProbe => capabilities.normalize(
+    defaultState.copyWith(
+      power: true,
+      mode: model == GreeModel.yx1fsf ? AcMode.econo : AcMode.cool,
+    ),
+  );
   static const common = {AcFeature.light, AcFeature.tempDisplay};
   @override
-  final capabilities = const AcCapabilities(
+  AcCapabilities get capabilities => AcCapabilities(
     minTempC: 16,
     maxTempC: 30,
-    modes: AcMode.values,
+    modes: model == GreeModel.yx1fsf
+        ? AcMode.values
+        : AcMode.values.take(5).toList(),
     fanSpeeds: FanSpeed.values,
     verticalSwings: VerticalSwing.values,
     tempDisplays: TempDisplay.values,
@@ -35,11 +50,12 @@ class GreeProtocol implements AcProtocol {
       AcFeature.tempDisplay,
     },
     modeRules: {
-      AcMode.auto: ModeRule(
+      AcMode.econo: const ModeRule(allowedFeatures: common),
+      AcMode.auto: const ModeRule(
         fixedTempC: 25,
         allowedFeatures: {...common, AcFeature.sleep},
       ),
-      AcMode.cool: ModeRule(
+      AcMode.cool: const ModeRule(
         allowedFeatures: {
           ...common,
           AcFeature.turbo,
@@ -47,12 +63,12 @@ class GreeProtocol implements AcProtocol {
           AcFeature.sleep,
         },
       ),
-      AcMode.dry: ModeRule(
+      AcMode.dry: const ModeRule(
         fixedFan: FanSpeed.low,
         allowedFeatures: {...common, AcFeature.xfan, AcFeature.sleep},
       ),
-      AcMode.fan: ModeRule(tempEditable: false, allowedFeatures: common),
-      AcMode.heat: ModeRule(
+      AcMode.fan: const ModeRule(tempEditable: false, allowedFeatures: common),
+      AcMode.heat: const ModeRule(
         allowedFeatures: {...common, AcFeature.turbo, AcFeature.sleep},
       ),
     },

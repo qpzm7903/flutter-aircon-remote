@@ -3,6 +3,12 @@ import 'package:flutter_aircon_remote/domain/ac_state.dart';
 import 'package:flutter_aircon_remote/domain/ac_enums.dart';
 
 void main() {
+  test('econo JSON and unknown mode fallback', () {
+    final s = const AcState.initial().copyWith(mode: AcMode.econo);
+    expect(AcState.fromJson(s.toJson()), s);
+    expect(AcState.fromJson({'mode': 'bad'}).mode, AcMode.cool);
+  });
+
   test('initial state, JSON schema and value equality', () {
     const s = AcState.initial();
     expect(s.power, false);

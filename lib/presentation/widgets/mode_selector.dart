@@ -12,7 +12,7 @@ class ModeSelector extends StatelessWidget {
     final selected = context.select<RemoteController, (AcMode, String)>(
       (c) => (c.state.mode, c.protocol.id),
     );
-    final c = context.read<RemoteController>();
+    final c = context.watch<RemoteController>();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -24,8 +24,11 @@ class ModeSelector extends StatelessWidget {
             showSelectedIcon: false,
             segments: c.capabilities.modes
                 .map(
-                  (v) =>
-                      ButtonSegment(value: v, label: Text(Strings.modes[v]!)),
+                  (v) => ButtonSegment(
+                    value: v,
+                    label: Text(Strings.modes[v]!),
+                    icon: v == AcMode.econo ? const Icon(Icons.eco) : null,
+                  ),
                 )
                 .toList(),
             selected: {selected.$1},

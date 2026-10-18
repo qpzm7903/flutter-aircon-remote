@@ -12,7 +12,7 @@ class FeatureToggles extends StatelessWidget {
     final data = context.select(
       (RemoteController c) => (c.state, c.protocol.id),
     );
-    final c = context.read<RemoteController>();
+    final c = context.watch<RemoteController>();
     final s = data.$1;
     bool selected(AcFeature f) => switch (f) {
       AcFeature.turbo => s.turbo,

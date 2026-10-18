@@ -6,6 +6,27 @@ import 'package:flutter_aircon_remote/protocol/gree/gree_state_codec.dart';
 import 'package:flutter_aircon_remote/domain/ac_capabilities.dart';
 
 void main() {
+  test(
+    'econo allows light and display, temperature and fan, no turbo xfan sleep',
+    () {
+      final c = GreeProtocol(GreeModel.yx1fsf).capabilities;
+      final s = c.normalize(
+        const AcState.initial().copyWith(
+          mode: AcMode.econo,
+          turbo: true,
+          xfan: true,
+          sleep: true,
+          fan: FanSpeed.high,
+        ),
+      );
+      expect(s.turbo || s.xfan || s.sleep, false);
+      expect(s.light, true);
+      expect(s.fan, FanSpeed.high);
+      expect(c.canEditTemp(s), true);
+      expect(c.canEditFan(s), true);
+    },
+  );
+
   final c = GreeProtocol(GreeModel.yaw1f).capabilities;
   test('Gree mode rules, clamp, feature intersection and editability', () {
     const s = AcState.initial();

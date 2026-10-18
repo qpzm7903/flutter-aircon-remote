@@ -7,12 +7,14 @@ void main() {
   test('registration lookup order immutability and duplicates', () {
     final a = GreeProtocol(GreeModel.yaw1f);
     final b = GreeProtocol(GreeModel.ybofb);
-    final r = AcProtocolRegistry([a, b]);
+    final c = GreeProtocol(GreeModel.yx1fsf);
+    final r = AcProtocolRegistry([a, b, c]);
+    expect(r.brandNameOf('gree'), '格力 Gree');
     expect(r.byId('gree.yaw1f'), a);
     expect(r.byId('unknown'), null);
     expect(r.fallback, a);
     expect(r.brandIds, ['gree']);
-    expect(r.modelsOf('gree'), [a, b]);
+    expect(r.modelsOf('gree'), [a, b, c]);
     expect(r.modelsOf('other'), isEmpty);
     expect(() => AcProtocolRegistry([]), throwsStateError);
     expect(() => AcProtocolRegistry([a, a]), throwsStateError);

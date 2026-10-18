@@ -5,14 +5,15 @@ import '../../application/remote_controller.dart';
 import '../strings.dart';
 
 class NoIrBanner extends StatelessWidget {
-  const NoIrBanner({super.key});
+  const NoIrBanner({this.onRecheck, super.key});
+  final VoidCallback? onRecheck;
   @override
   Widget build(BuildContext context) => MaterialBanner(
     content: const Text(Strings.noIr),
     backgroundColor: Theme.of(context).colorScheme.errorContainer,
     actions: [
       TextButton(
-        onPressed: context.read<RemoteController>().recheckIr,
+        onPressed: onRecheck ?? context.read<RemoteController>().recheckIr,
         child: const Text(Strings.recheck),
       ),
     ],

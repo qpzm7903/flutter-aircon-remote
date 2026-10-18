@@ -12,5 +12,6 @@ class AcProtocolRegistry {
   List<AcProtocol> modelsOf(String brandId) =>
       all.where((p) => p.brandId == brandId).toList();
   AcProtocol? byId(String id) => all.where((p) => p.id == id).firstOrNull;
+  String brandNameOf(String id) => modelsOf(id).firstOrNull?.brandName ?? id;
   AcProtocol get fallback => all.first;
 }

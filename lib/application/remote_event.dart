@@ -10,3 +10,5 @@ final class TransmitFailed extends RemoteEvent {
   final IrErrorCode code;
   final String message;
 }
+
+final class DeviceRemoved extends RemoteEvent {}

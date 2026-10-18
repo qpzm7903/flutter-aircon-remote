@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
-import '../../application/remote_controller.dart';
+import '../../application/diagnostics_controller.dart';
 import '../../core/constants.dart';
 import '../strings.dart';
 
@@ -10,7 +10,7 @@ class DiagnosticsSheet extends StatelessWidget {
   const DiagnosticsSheet({super.key});
   @override
   Widget build(BuildContext context) {
-    final c = context.read<RemoteController>();
+    final c = context.read<DiagnosticsController>();
     final text =
         '${Strings.version}: ${AppConstants.version}\n${Strings.logPath}: ${c.logFilePath()}\n\n${c.logSnapshot().join('\n')}';
     return SafeArea(

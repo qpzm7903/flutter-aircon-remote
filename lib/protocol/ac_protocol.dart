@@ -3,6 +3,8 @@ import '../domain/ac_capabilities.dart';
 import '../domain/ir_frame.dart';
 
 abstract interface class AcProtocol {
+  String get modelNote;
+  AcState get pairingProbe;
   String get id;
   String get brandId;
   String get brandName;
