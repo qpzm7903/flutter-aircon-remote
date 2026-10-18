@@ -1,0 +1,53 @@
+plugins {
+    id 'com.android.application'
+    id 'kotlin-android'
+    id 'dev.flutter.flutter-gradle-plugin'
+}
+def localProperties = new Properties()
+def localPropertiesFile = rootProject.file('local.properties')
+if (localPropertiesFile.exists()) { localPropertiesFile.withReader('UTF-8') { localProperties.load(it) } }
+def keystoreProps = new Properties()
+def keystorePropsFile = rootProject.file('key.properties')
+if (keystorePropsFile.exists()) { keystorePropsFile.withReader('UTF-8') { keystoreProps.load(it) } }
+android {
+    namespace 'com.example.flutter_aircon_remote'
+    compileSdk 37
+    ndkVersion '30.0.16248370'
+    compileOptions {
+        coreLibraryDesugaringEnabled true
+        sourceCompatibility JavaVersion.VERSION_21
+        targetCompatibility JavaVersion.VERSION_21
+    }
+    kotlinOptions { jvmTarget = '21' }
+    sourceSets { main.java.srcDirs += 'src/main/kotlin' }
+    defaultConfig {
+        applicationId 'com.example.flutter_aircon_remote'
+        minSdk 35
+        targetSdk 37
+        versionCode localProperties.getProperty('flutter.versionCode', '1').toInteger()
+        versionName localProperties.getProperty('flutter.versionName', '0.1.0')
+        ndk { abiFilters 'arm64-v8a' }
+    }
+    signingConfigs {
+        if (keystorePropsFile.exists()) {
+            release {
+                storeFile file(keystoreProps['storeFile'])
+                storePassword keystoreProps['storePassword']
+                keyAlias keystoreProps['keyAlias']
+                keyPassword keystoreProps['keyPassword']
+            }
+        }
+    }
+    buildTypes {
+        release {
+            signingConfig keystorePropsFile.exists() ? signingConfigs.release : signingConfigs.debug
+            minifyEnabled false
+            shrinkResources false
+        }
+    }
+}
+flutter { source '../..' }
+dependencies {
+    implementation 'org.jetbrains.kotlin:kotlin-stdlib:2.3.21'
+    coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.1.5'
+}
