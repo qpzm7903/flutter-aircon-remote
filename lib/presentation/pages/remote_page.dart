@@ -15,6 +15,7 @@ import '../widgets/temperature_display.dart';
 import '../widgets/mode_selector.dart';
 import '../widgets/fan_selector.dart';
 import '../widgets/swing_selector.dart';
+import '../widgets/horizontal_swing_selector.dart';
 import '../widgets/feature_toggles.dart';
 
 class RemotePage extends StatefulWidget {
@@ -39,6 +40,10 @@ class _RemotePageState extends State<RemotePage> {
         return;
       }
       if (event is TransmitSucceeded) {
+        if (event.wifiPulse) {
+          ScaffoldMessenger.of(context)
+              .showSnackBar(const SnackBar(content: Text('已发送一次 Wi‑Fi 键')));
+        }
         unawaited(HapticFeedback.lightImpact());
       }
       if (event is TransmitFailed) {
@@ -146,6 +151,7 @@ class _RemotePageState extends State<RemotePage> {
                                     1)
                                   const SwingSelector(),
                                 const SizedBox(height: 20),
+                                const HorizontalSwingSelector(),
                                 const FeatureToggles(),
                               ],
                             ),

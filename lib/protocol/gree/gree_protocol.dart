@@ -1,4 +1,6 @@
 import '../../domain/ac_state.dart';
+import '../../domain/fahrenheit_step.dart';
+import '../../domain/capability_overrides.dart';
 import '../../domain/ac_enums.dart';
 import '../../domain/ac_capabilities.dart';
 import '../../domain/ir_frame.dart';
@@ -31,9 +33,36 @@ class GreeProtocol implements AcProtocol {
       mode: model == GreeModel.yx1fsf ? AcMode.econo : AcMode.cool,
     ),
   );
-  static const common = {AcFeature.light, AcFeature.tempDisplay};
+  @override
+  CapabilityOverrides get recommendedOverrides => CapabilityOverrides(
+    hiddenFeatures: {
+      AcFeature.swingH,
+      AcFeature.wifi,
+      AcFeature.timer,
+      if (model != GreeModel.yx1fsf) AcFeature.fahrenheit,
+    },
+    hiddenSwings: {
+      VerticalSwing.autoDown,
+      VerticalSwing.autoMiddle,
+      VerticalSwing.autoUp,
+    },
+  );
+  static const common = {
+    AcFeature.light,
+    AcFeature.tempDisplay,
+    AcFeature.swingH,
+    AcFeature.wifi,
+    AcFeature.timer,
+    AcFeature.fahrenheit,
+  };
   @override
   AcCapabilities get capabilities => AcCapabilities(
+    horizontalSwings: HorizontalSwing.values,
+    fahrenheitSteps: [
+      for (final r in greeFahrenheitTable) FahrenheitStep(r.f, r.c),
+    ],
+    timerStepMinutes: 30,
+    maxTimerMinutes: 1440,
     minTempC: 16,
     maxTempC: 30,
     modes: model == GreeModel.yx1fsf
@@ -43,6 +72,7 @@ class GreeProtocol implements AcProtocol {
     verticalSwings: VerticalSwing.values,
     tempDisplays: TempDisplay.values,
     features: {
+      ...common,
       AcFeature.turbo,
       AcFeature.light,
       AcFeature.xfan,

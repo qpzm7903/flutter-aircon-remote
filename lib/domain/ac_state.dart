@@ -2,6 +2,11 @@ import 'ac_enums.dart';
 
 final class AcState {
   const AcState({
+    this.horizontalSwing = HorizontalSwing.off,
+    this.targetTempF,
+    this.timerMinutes = 0,
+    this.timerSetAtMs,
+    this.wifiPulse = false,
     required this.power,
     required this.mode,
     required this.targetTempC,
@@ -15,7 +20,12 @@ final class AcState {
     required this.tempDisplay,
   });
   const AcState.initial()
-    : power = false,
+    : horizontalSwing = HorizontalSwing.off,
+      targetTempF = null,
+      timerMinutes = 0,
+      timerSetAtMs = null,
+      wifiPulse = false,
+      power = false,
       mode = AcMode.cool,
       targetTempC = 26,
       fan = FanSpeed.auto,
@@ -26,6 +36,29 @@ final class AcState {
       xfan = false,
       sleep = false,
       tempDisplay = TempDisplay.off;
+  final HorizontalSwing horizontalSwing;
+  final int? targetTempF;
+  final int timerMinutes;
+  final int? timerSetAtMs;
+  final bool wifiPulse;
+  static const _unset = Object();
+  bool get useFahrenheit => targetTempF != null;
+  int timerRemainingMinutes(int nowMs) =>
+      timerSetAtMs == null || timerMinutes <= 0
+      ? 0
+      : (timerMinutes - ((nowMs - timerSetAtMs!).clamp(0, 1 << 62) / 60000))
+            .ceil()
+            .clamp(0, timerMinutes);
+  AcState resolveTimer(int nowMs) {
+    final remaining = timerRemainingMinutes(nowMs);
+    return remaining <= 0
+        ? copyWith(timerMinutes: 0, timerSetAtMs: null)
+        : copyWith(
+            timerMinutes: ((remaining + 29) ~/ 30) * 30,
+            timerSetAtMs: nowMs,
+          );
+  }
+
   final bool power;
   final AcMode mode;
   final int targetTempC;
@@ -38,6 +71,11 @@ final class AcState {
   final bool sleep;
   final TempDisplay tempDisplay;
   AcState copyWith({
+    HorizontalSwing? horizontalSwing,
+    Object? targetTempF = _unset,
+    int? timerMinutes,
+    Object? timerSetAtMs = _unset,
+    bool? wifiPulse,
     bool? power,
     AcMode? mode,
     int? targetTempC,
@@ -50,6 +88,15 @@ final class AcState {
     bool? sleep,
     TempDisplay? tempDisplay,
   }) => AcState(
+    horizontalSwing: horizontalSwing ?? this.horizontalSwing,
+    targetTempF: identical(targetTempF, _unset)
+        ? this.targetTempF
+        : targetTempF as int?,
+    timerMinutes: timerMinutes ?? this.timerMinutes,
+    timerSetAtMs: identical(timerSetAtMs, _unset)
+        ? this.timerSetAtMs
+        : timerSetAtMs as int?,
+    wifiPulse: wifiPulse ?? this.wifiPulse,
     power: power ?? this.power,
     mode: mode ?? this.mode,
     targetTempC: targetTempC ?? this.targetTempC,
@@ -63,7 +110,11 @@ final class AcState {
     tempDisplay: tempDisplay ?? this.tempDisplay,
   );
   Map<String, Object?> toJson() => {
-    'v': 1,
+    'v': 2,
+    'horizontalSwing': horizontalSwing.name,
+    'targetTempF': targetTempF,
+    'timerMinutes': timerMinutes,
+    'timerSetAtMs': timerSetAtMs,
     'power': power,
     'mode': mode.name,
     'targetTempC': targetTempC,
@@ -77,6 +128,16 @@ final class AcState {
     'tempDisplay': tempDisplay.name,
   };
   factory AcState.fromJson(Map<String, Object?> json) => AcState(
+    horizontalSwing:
+        HorizontalSwing.values
+            .where((v) => v.name == json['horizontalSwing'])
+            .firstOrNull ??
+        HorizontalSwing.off,
+    targetTempF: json['targetTempF'] is int ? json['targetTempF'] as int : null,
+    timerMinutes: json['timerMinutes'] is int ? json['timerMinutes'] as int : 0,
+    timerSetAtMs: json['timerSetAtMs'] is int
+        ? json['timerSetAtMs'] as int
+        : null,
     power: json['power'] is bool ? json['power'] as bool : false,
     mode:
         AcMode.values.where((v) => v.name == json['mode']).firstOrNull ??
@@ -104,6 +165,11 @@ final class AcState {
   @override
   bool operator ==(Object other) =>
       other is AcState &&
+      horizontalSwing == other.horizontalSwing &&
+      targetTempF == other.targetTempF &&
+      timerMinutes == other.timerMinutes &&
+      timerSetAtMs == other.timerSetAtMs &&
+      wifiPulse == other.wifiPulse &&
       power == other.power &&
       mode == other.mode &&
       targetTempC == other.targetTempC &&
@@ -117,6 +183,11 @@ final class AcState {
       tempDisplay == other.tempDisplay;
   @override
   int get hashCode => Object.hash(
+    horizontalSwing,
+    targetTempF,
+    timerMinutes,
+    timerSetAtMs,
+    wifiPulse,
     power,
     mode,
     targetTempC,

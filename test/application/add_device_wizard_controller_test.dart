@@ -69,6 +69,10 @@ void main() {
     await c.dispatch(const Next());
     await c.dispatch(const Skip());
     expect(ds.devices.single.state.power, false);
+    expect(
+      ds.devices.single.overrides,
+      ds.registry.byId(ds.devices.single.protocolId)!.recommendedOverrides,
+    );
     final repair = AddDeviceWizardController(
       registry: ds.registry,
       transmitter: ir,

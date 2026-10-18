@@ -11,6 +11,13 @@ void main() {
             .whereType<File>()
             .where((f) => f.path.endsWith('.dart'))) {
       final layer = file.path.split('/')[1];
+      if (!file.path.split('/').last.startsWith('gree_')) {
+        expect(
+          file.readAsStringSync(),
+          isNot(contains('greeFahrenheitTable')),
+          reason: file.path,
+        );
+      }
       for (final match in imports.allMatches(file.readAsStringSync())) {
         final uri = match[1]!;
         final target = uri.startsWith('.') ? file.uri.resolve(uri).path : uri;
@@ -19,7 +26,8 @@ void main() {
         }
 
         forbids(uri.startsWith('package:flutter_aircon_remote/'));
-        if (target.endsWith('/legacy_v1_migrator.dart')) {
+        if ((target.endsWith('/legacy_v1_migrator.dart') ||
+            target.endsWith('/device_schema_v3_migrator.dart'))) {
           forbids(layer != 'infrastructure');
         }
         if (file.path.endsWith('/add_device_wizard.dart')) {

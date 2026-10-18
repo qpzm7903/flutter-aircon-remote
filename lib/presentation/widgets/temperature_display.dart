@@ -38,17 +38,31 @@ class TemperatureDisplay extends StatelessWidget {
             Semantics(
               liveRegion: true,
               child: Text(
-                '${data.$1} °C',
+                '${c.state.targetTempF ?? data.$1} °${c.state.useFahrenheit ? 'F' : 'C'}',
                 style: Theme.of(context).textTheme.displayLarge,
               ),
             ),
+            if (c.capabilities.isFeatureEnabled(c.state, AcFeature.fahrenheit))
+              SegmentedButton<bool>(
+                segments: const [
+                  ButtonSegment(value: false, label: Text('℃')),
+                  ButtonSegment(value: true, label: Text('℉')),
+                ],
+                selected: {c.state.useFahrenheit},
+                onSelectionChanged: (v) => c.setUseFahrenheit(v.first),
+              ),
             Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 _RepeatButton(
                   icon: Icons.remove,
                   label: Strings.decrease,
-                  onStep: data.$2 && data.$1 > c.capabilities.minTempC
+                  onStep:
+                      data.$2 &&
+                          (c.state.useFahrenheit
+                              ? c.state.targetTempF! >
+                                    c.capabilities.fahrenheitRange!.min
+                              : data.$1 > c.capabilities.minTempC)
                       ? () => c.stepTemp(-1)
                       : null,
                 ),
@@ -56,7 +70,12 @@ class TemperatureDisplay extends StatelessWidget {
                 _RepeatButton(
                   icon: Icons.add,
                   label: Strings.increase,
-                  onStep: data.$2 && data.$1 < c.capabilities.maxTempC
+                  onStep:
+                      data.$2 &&
+                          (c.state.useFahrenheit
+                              ? c.state.targetTempF! <
+                                    c.capabilities.fahrenheitRange!.max
+                              : data.$1 < c.capabilities.maxTempC)
                       ? () => c.stepTemp(1)
                       : null,
                 ),

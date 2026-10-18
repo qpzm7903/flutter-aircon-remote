@@ -76,6 +76,7 @@ class AddDeviceWizardController extends ChangeNotifier {
             room: effect.outcome.room,
             icon: effect.outcome.icon,
             protocolId: p.id,
+            overrides: p.recommendedOverrides,
             initialState: effect.outcome.pairingConfirmed
                 ? p.capabilities.normalize(p.pairingProbe)
                 : p.defaultState,

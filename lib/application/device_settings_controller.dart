@@ -109,12 +109,32 @@ class DeviceSettingsController extends ChangeNotifier {
                 .toSet(),
     ),
   );
+  void setHSwingVisible(HorizontalSwing h, bool v) {
+    if (h == HorizontalSwing.off) return;
+    _over(
+      draft.overrides.copyWith(
+        hiddenHSwings: _visibility(draft.overrides.hiddenHSwings, h, v),
+      ),
+    );
+  }
+
+  void setAllHSwingVisible(bool v) => _over(
+    draft.overrides.copyWith(
+      hiddenFeatures: _visibility(
+        draft.overrides.hiddenFeatures,
+        AcFeature.swingH,
+        v,
+      ),
+      hiddenHSwings: {},
+    ),
+  );
   void setTempRange(int? min, int? max) => _over(
     CapabilityOverrides(
       hiddenFeatures: draft.overrides.hiddenFeatures,
       hiddenModes: draft.overrides.hiddenModes,
       hiddenFanSpeeds: draft.overrides.hiddenFanSpeeds,
       hiddenSwings: draft.overrides.hiddenSwings,
+      hiddenHSwings: draft.overrides.hiddenHSwings,
       minTempC: min,
       maxTempC: max,
     ),

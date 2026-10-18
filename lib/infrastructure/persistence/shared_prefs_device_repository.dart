@@ -8,6 +8,7 @@ import '../../domain/ac_state.dart';
 import '../logging/log_service.dart';
 import 'device_repository.dart';
 import 'legacy_v1_migrator.dart';
+import 'device_schema_v3_migrator.dart';
 
 class SharedPrefsDeviceRepository implements DeviceRepository {
   SharedPrefsDeviceRepository(this.prefs, {required this.fallbackProtocolId});
@@ -20,6 +21,7 @@ class SharedPrefsDeviceRepository implements DeviceRepository {
         prefs,
         fallbackProtocolId: fallbackProtocolId,
       ).migrateIfNeeded();
+      await DeviceSchemaV3Migrator(prefs).migrateIfNeeded();
     } catch (e) {
       LogService.warning('Migration failed', e);
       return [];
@@ -82,7 +84,7 @@ class SharedPrefsDeviceRepository implements DeviceRepository {
   Future<void> saveDevices(List<AcDevice> devices) => _write(
     AppConstants.deviceIndexKey,
     jsonEncode({
-      'v': 2,
+      'v': 3,
       'devices': [
         for (var i = 0; i < devices.length; i++)
           devices[i].copyWith(sortOrder: i).toMetaJson(),

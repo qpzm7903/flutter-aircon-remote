@@ -186,9 +186,30 @@ class _SettingsBodyState extends State<_SettingsBody> {
                   value: e.verticalSwings.contains(s),
                   onChanged: (v) => c.setSwingVisible(s, v),
                 ),
+            if (e.features.contains(AcFeature.swingH))
+              for (final h in p.horizontalSwings.where(
+                (h) => h != HorizontalSwing.off,
+              ))
+                SwitchListTile(
+                  title: Text(
+                    '${Strings.horizontalSwing} · ${Strings.hSwings[h]}',
+                  ),
+                  value: e.horizontalSwings.contains(h),
+                  onChanged: (v) => c.setHSwingVisible(h, v),
+                ),
             for (final f in p.features)
               SwitchListTile(
                 title: Text(Strings.featureNames[f]!),
+                subtitle:
+                    {
+                          AcFeature.swingH,
+                          AcFeature.wifi,
+                          AcFeature.timer,
+                          AcFeature.fahrenheit,
+                        }.contains(f) &&
+                        !e.features.contains(f)
+                    ? const Text('此机型多数没有该功能，按需打开')
+                    : null,
                 value: e.features.contains(f),
                 onChanged: (v) => c.setFeatureVisible(f, v),
               ),

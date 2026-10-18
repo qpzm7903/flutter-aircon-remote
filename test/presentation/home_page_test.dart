@@ -14,7 +14,7 @@ void main() {
     await t.pumpAndSettle();
     await t.tap(find.byTooltip(Strings.diagnostics));
     await t.pumpAndSettle();
-    expect(find.textContaining('版本: 0.2.0'), findsOneWidget);
+    expect(find.textContaining('版本: 0.3.0'), findsOneWidget);
   });
   testWidgets('list subtitle reorder and navigation', (t) async {
     final (ds, _) = await pumpHome(

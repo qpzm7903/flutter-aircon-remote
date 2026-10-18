@@ -1,7 +1,7 @@
 name: flutter_aircon_remote
 description: 使用手机内置红外发射器控制格力空调。
 publish_to: none
-version: 0.2.0
+version: 0.3.0
 environment:
   sdk: '>=3.13.5 <4.0.0'
 dependencies:

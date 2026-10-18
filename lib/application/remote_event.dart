@@ -3,7 +3,10 @@ export '../infrastructure/ir/ir_transmitter.dart' show IrErrorCode;
 
 sealed class RemoteEvent {}
 
-final class TransmitSucceeded extends RemoteEvent {}
+final class TransmitSucceeded extends RemoteEvent {
+  TransmitSucceeded({this.wifiPulse = false});
+  final bool wifiPulse;
+}
 
 final class TransmitFailed extends RemoteEvent {
   TransmitFailed(this.code, this.message);

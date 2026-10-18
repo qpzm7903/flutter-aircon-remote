@@ -1510,7 +1510,7 @@ int? get timerRemainingMinutes;                           // 供 TimerChip；tim
 - 降级：见 `docs/versions/0.3.0.md` §9。
 
 ## 25. 分层与 import 规则（v0.3.0）
-分层规则（§2）不变。新增文件的归属：`domain/fahrenheit_step.dart`（零外部依赖）；`protocol/gree/*` 持有华氏表与原生值表；`infrastructure/persistence/device_schema_v3_migrator.dart`；`application` 不 import Flutter（时钟以 `int Function()` 注入）；`presentation` 的新 widget 只经 `RemoteController`/`DeviceSettingsController` 取数，不 import `protocol/`、`infrastructure/`。
+分层规则（§2）不变。新增文件的归属：`domain/fahrenheit_step.dart`（零外部依赖）；`protocol/gree/*` 持有华氏表与原生值表；`infrastructure/persistence/device_schema_v3_migrator.dart`；`application` foundation allowed（允许 `package:flutter/foundation.dart`，禁止 material 与 presentation 依赖；时钟以 `int Function()` 注入）；`presentation` 的新 widget 只经 `RemoteController`/`DeviceSettingsController` 取数，不 import `protocol/`、`infrastructure/`。
 `architecture_test` 新增断言：①`device_schema_v3_migrator.dart` 只能被 `infrastructure/` 内文件 import；②`lib/domain/` 下任何文件不 import `protocol/`（华氏表不得出现在 domain，domain 只见 `FahrenheitStep`）；③`gree_*` 文件之外不出现 `greeFahrenheitTable`；其余既有规则（add_device_wizard 纯净、presentation 不碰 protocol/infrastructure）保持。
 
 ## 26. 测试、里程碑与完成定义（v0.3.0）

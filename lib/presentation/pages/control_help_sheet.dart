@@ -24,6 +24,7 @@ class ControlHelpSheet extends StatelessWidget {
       children: [
         Text(Strings.helpTitle, style: Theme.of(context).textTheme.titleLarge),
         const Text(Strings.helpIntro),
+        const Text(Strings.ifeelNote),
         for (final e in explainControls(
           protocol: protocol,
           overrides: overrides,
@@ -35,6 +36,8 @@ class ControlHelpSheet extends StatelessWidget {
               final FanSpeed f => '${Strings.fan} · ${Strings.fans[f]}',
               final VerticalSwing v =>
                 '${Strings.swing} · ${Strings.swings[v]}',
+              final HorizontalSwing h =>
+                '${Strings.horizontalSwing} · ${Strings.hSwings[h]}',
               final AcFeature f => Strings.featureNames[f]!,
               _ => Strings.temperature,
             }),

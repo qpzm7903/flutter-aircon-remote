@@ -14,7 +14,7 @@ void main() {
     expect(s.power, false);
     expect(s.targetTempC, 26);
     expect(s.light, true);
-    expect(s.toJson()['v'], 1);
+    expect(s.toJson()['v'], 2);
     expect(AcState.fromJson(s.toJson()), s);
     expect(s.copyWith().hashCode, s.hashCode);
     final n = s.copyWith(

@@ -2,6 +2,18 @@ import '../domain/ac_enums.dart';
 import '../application/remote_event.dart';
 
 abstract final class Strings {
+  static const horizontalSwing = '水平扫风';
+  static const ifeelNote = '不支持 I‑Feel：上游未定义测温报文，手机没有可信室温传感器，也无法可靠后台周期发送红外。';
+  static const timerNote = '定时（实验）：以空调实际反应为准。剩余时间为手机估算，每次发码向上取整到半小时，最多多 29 分钟。';
+  static const hSwings = {
+    HorizontalSwing.off: '关',
+    HorizontalSwing.auto: '自动',
+    HorizontalSwing.maxLeft: '最左',
+    HorizontalSwing.left: '偏左',
+    HorizontalSwing.middle: '居中',
+    HorizontalSwing.right: '偏右',
+    HorizontalSwing.maxRight: '最右',
+  };
   static const keepOne = '至少保留一个';
   static const discardQuestion = '放弃未保存的修改？';
   static const cancel = '取消';
@@ -103,13 +115,16 @@ abstract final class Strings {
     FanSpeed.high: '3',
   };
   static const swings = {
-    VerticalSwing.off: '关',
+    VerticalSwing.off: '关（保持当前位置）',
     VerticalSwing.auto: '自动',
     VerticalSwing.highest: '最上',
     VerticalSwing.high: '上',
     VerticalSwing.middle: '中',
     VerticalSwing.low: '下',
     VerticalSwing.lowest: '最下',
+    VerticalSwing.autoDown: '下部扫风',
+    VerticalSwing.autoMiddle: '中部扫风',
+    VerticalSwing.autoUp: '上部扫风',
   };
   static const featureNames = {
     AcFeature.turbo: '强劲',
@@ -118,6 +133,10 @@ abstract final class Strings {
     AcFeature.xfan: '换气',
     AcFeature.sleep: '睡眠',
     AcFeature.tempDisplay: tempDisplay,
+    AcFeature.swingH: horizontalSwing,
+    AcFeature.fahrenheit: '华氏度（℃/℉ 切换）',
+    AcFeature.timer: '定时（实验）',
+    AcFeature.wifi: '空调 Wi‑Fi 键',
   };
   static const displays = {
     TempDisplay.off: '关',

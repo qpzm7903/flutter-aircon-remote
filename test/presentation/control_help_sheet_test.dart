@@ -7,6 +7,8 @@ import 'package:flutter_aircon_remote/presentation/pages/control_help_sheet.dart
 
 import '../support/pump_app.dart';
 
+import 'package:flutter_aircon_remote/presentation/strings.dart';
+
 void main() {
   testWidgets('all status badges and unsupported health', (t) async {
     await t.pumpWidget(
@@ -22,6 +24,7 @@ void main() {
         ),
       ),
     );
+    expect(find.text(Strings.ifeelNote), findsOneWidget);
     expect(find.text('可用'), findsWidgets);
     await t.scrollUntilVisible(find.text('健康'), 250);
     expect(find.text('此协议不支持'), findsWidgets);

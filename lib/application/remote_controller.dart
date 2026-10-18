@@ -17,15 +17,17 @@ enum IrAvailability { unknown, available, unavailable }
 
 class RemoteController extends ChangeNotifier {
   RemoteController({
+    int Function()? nowMs,
     required this.deviceId,
     required this.registry,
     required this._transmitter,
     required this._devices,
-  }) {
+  }) : _nowMs = nowMs ?? (() => DateTime.now().millisecondsSinceEpoch) {
     _lastDevice = device;
-    _state = capabilities.normalize(device.state);
+    _state = capabilities.normalize(device.state.resolveTimer(_nowMs()));
     _devices.addListener(_onDevicesChanged);
   }
+  final int Function() _nowMs;
   final String deviceId;
   final AcProtocolRegistry registry;
   final IrTransmitter _transmitter;
@@ -52,7 +54,7 @@ class RemoteController extends ChangeNotifier {
         next.overrides != _lastDevice.overrides) {
       _pending = null;
       _state = capabilities.normalize(_state);
-      _devices.saveState(deviceId, _state);
+      _devices.saveState(deviceId, _state.copyWith(wifiPulse: false));
     }
     _lastDevice = next;
     _notify();
@@ -74,7 +76,8 @@ class RemoteController extends ChangeNotifier {
   }
 
   Future<void> init() async {
-    _state = capabilities.normalize(device.state);
+    _state = capabilities.normalize(device.state.resolveTimer(_nowMs()));
+    if (_state != device.state) _devices.saveState(deviceId, _state);
     await recheckIr();
   }
 
@@ -97,12 +100,12 @@ class RemoteController extends ChangeNotifier {
     if (_disposed || _removed || _availability == IrAvailability.unavailable) {
       return;
     }
-    final next = capabilities.normalize(mutate(state));
+    final next = capabilities.normalize(mutate(state).resolveTimer(_nowMs()));
     if (next == state) {
       return;
     }
     _state = next;
-    _devices.saveState(deviceId, next);
+    _devices.saveState(deviceId, next.copyWith(wifiPulse: false));
     _notify();
     _pending = next;
     _pendingProtocol = protocol;
@@ -128,7 +131,7 @@ class RemoteController extends ChangeNotifier {
           await _transmitter.transmit(frame);
           LogService.info('Transmit succeeded');
           if (!_disposed) {
-            _events.add(TransmitSucceeded());
+            _events.add(TransmitSucceeded(wifiPulse: next.wifiPulse));
           }
         } catch (e, stack) {
           final failure = e is IrTransmitException
@@ -138,6 +141,12 @@ class RemoteController extends ChangeNotifier {
           if (!_disposed) {
             _events.add(TransmitFailed(failure.code, failure.message));
           }
+        } finally {
+          if (next.wifiPulse) {
+            _state = _state.copyWith(wifiPulse: false);
+            _pending = _pending?.copyWith(wifiPulse: false);
+            _notify();
+          }
         }
       }
     } finally {
@@ -146,11 +155,43 @@ class RemoteController extends ChangeNotifier {
     }
   }
 
+  Future<void> setHorizontalSwing(HorizontalSwing h) =>
+      update((s) => s.copyWith(horizontalSwing: h));
+  Future<void> setUseFahrenheit(bool on) => update(
+    (s) => s.copyWith(
+      targetTempF: on ? capabilities.fahrenheitFor(s.targetTempC) ?? 77 : null,
+    ),
+  );
+  Future<void> setTimer(int minutes) => update(
+    (s) => s.copyWith(
+      timerMinutes: minutes,
+      timerSetAtMs: minutes > 0 ? _nowMs() : null,
+    ),
+  );
+  int? get timerRemainingMinutes {
+    final m = state.timerRemainingMinutes(_nowMs());
+    return m > 0 ? m : null;
+  }
+
+  Future<void> pressWifi() => update((s) => s.copyWith(wifiPulse: true));
+  Future<void> cycleTempDisplay() => update((s) {
+    final values = capabilities.tempDisplays;
+    return values.isEmpty
+        ? s
+        : s.copyWith(
+            tempDisplay:
+                values[(values.indexOf(s.tempDisplay) + 1) % values.length],
+          );
+  });
   Future<void> togglePower() => update((s) => s.copyWith(power: !s.power));
   Future<void> setMode(AcMode m) => update((s) => s.copyWith(mode: m));
   Future<void> stepTemp(int delta) async {
     if (capabilities.canEditTemp(state)) {
-      await update((s) => s.copyWith(targetTempC: s.targetTempC + delta));
+      await update(
+        (s) => s.useFahrenheit
+            ? s.copyWith(targetTempF: s.targetTempF! + delta)
+            : s.copyWith(targetTempC: s.targetTempC + delta),
+      );
     }
   }
 
@@ -166,7 +207,11 @@ class RemoteController extends ChangeNotifier {
       AcFeature.health => s.copyWith(health: !s.health),
       AcFeature.xfan => s.copyWith(xfan: !s.xfan),
       AcFeature.sleep => s.copyWith(sleep: !s.sleep),
-      AcFeature.tempDisplay => s,
+      AcFeature.tempDisplay ||
+      AcFeature.swingH ||
+      AcFeature.wifi ||
+      AcFeature.timer ||
+      AcFeature.fahrenheit => s,
     },
   );
   @override

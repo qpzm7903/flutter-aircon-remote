@@ -3,7 +3,14 @@ import 'ac_enums.dart';
 import 'ac_state.dart';
 import 'capability_overrides.dart';
 
-enum ControlKind { mode, fanSpeed, verticalSwing, feature, temperature }
+enum ControlKind {
+  mode,
+  fanSpeed,
+  verticalSwing,
+  feature,
+  temperature,
+  horizontalSwing,
+}
 
 enum ControlStatus {
   available,
@@ -65,6 +72,17 @@ List<ControlExplanation> explainControls({
         v,
         protocol.verticalSwings.contains(v),
         overrides.hiddenSwings.contains(v),
+      ),
+    for (final v in HorizontalSwing.values.where(
+      (v) => v != HorizontalSwing.off,
+    ))
+      item(
+        ControlKind.horizontalSwing,
+        v,
+        protocol.horizontalSwings.contains(v),
+        overrides.hiddenHSwings.contains(v) ||
+            overrides.hiddenFeatures.contains(AcFeature.swingH),
+        s != null && !effective.isFeatureEnabled(s, AcFeature.swingH),
       ),
     for (final v in AcFeature.values)
       item(

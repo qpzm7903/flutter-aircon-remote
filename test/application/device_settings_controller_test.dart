@@ -21,6 +21,39 @@ void main() {
       registry: ds.registry,
     );
   });
+  test(
+    'new visibility controls preserve positions across range edits',
+    () async {
+      c.setHSwingVisible(HorizontalSwing.right, false);
+      c.setHSwingVisible(HorizontalSwing.off, false);
+      c.setSwingVisible(VerticalSwing.autoUp, false);
+      c.setTempRange(20, 28);
+      expect(
+        c.effectiveCapabilities.horizontalSwings,
+        isNot(contains(HorizontalSwing.right)),
+      );
+      expect(
+        c.effectiveCapabilities.horizontalSwings,
+        contains(HorizontalSwing.off),
+      );
+      expect(
+        c.effectiveCapabilities.verticalSwings,
+        isNot(contains(VerticalSwing.autoUp)),
+      );
+      c.setAllHSwingVisible(false);
+      expect(
+        c.effectiveCapabilities.features,
+        isNot(contains(AcFeature.swingH)),
+      );
+      c.setAllHSwingVisible(true);
+      expect(c.effectiveCapabilities.horizontalSwings, HorizontalSwing.values);
+      for (final f in [AcFeature.timer, AcFeature.wifi, AcFeature.fahrenheit]) {
+        c.setFeatureVisible(f, false);
+        expect(c.effectiveCapabilities.features, isNot(contains(f)));
+      }
+      expect(await c.save(), true);
+    },
+  );
   tearDown(() {
     c.dispose();
     ds.dispose();

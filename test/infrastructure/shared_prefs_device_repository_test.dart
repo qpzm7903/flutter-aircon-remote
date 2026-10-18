@@ -11,6 +11,9 @@ import 'package:flutter_aircon_remote/domain/ac_state.dart';
 
 import '../support/pump_app.dart';
 
+import 'package:flutter_aircon_remote/domain/ac_enums.dart';
+import 'package:flutter_aircon_remote/domain/capability_overrides.dart';
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   Future<SharedPrefsDeviceRepository> repo(Map<String, Object> values) async {
@@ -21,6 +24,26 @@ void main() {
     );
   }
 
+  test('v3 state and horizontal override roundtrip', () async {
+    final r = await repo({'app.schemaVersion': 3});
+    final state = const AcState.initial().copyWith(
+      targetTempF: 79,
+      timerMinutes: 90,
+      timerSetAtMs: 123,
+      horizontalSwing: HorizontalSwing.left,
+      verticalSwing: VerticalSwing.autoUp,
+    );
+    final d = testDevice(
+      overrides: const CapabilityOverrides(
+        hiddenHSwings: {HorizontalSwing.right},
+      ),
+    ).copyWith(state: state);
+    await r.saveDevices([d]);
+    await r.saveState(d.id, state.copyWith(wifiPulse: true));
+    final actual = (await r.load()).single;
+    expect(actual.state, state);
+    expect(actual.overrides, d.overrides);
+  });
   test(
     'metadata and state CRUD; ordering renumbered; orphan preserved',
     () async {

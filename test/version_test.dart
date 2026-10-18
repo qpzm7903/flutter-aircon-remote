@@ -6,16 +6,20 @@ import 'package:flutter_aircon_remote/core/constants.dart';
 
 void main() {
   test('version agrees with pubspec and native channel agrees with Dart', () {
-    expect(AppConstants.version, '0.2.0');
+    expect(AppConstants.version, '0.3.0');
     expect(
       File('android/app/build.gradle').readAsStringSync(),
       contains("'flutter.versionName', '${AppConstants.version}'"),
     );
-    expect(File('README.md').readAsStringSync(), contains('0.2.0'));
-    expect(File('docs/versions/0.2.0.md').existsSync(), true);
+    final readme = File('README.md').readAsStringSync();
+    expect(readme, contains('**v0.3.0 已实现**'));
+    expect(readme, isNot(contains('尚未实现')));
+    expect(readme, isNot(contains('0.2.0 不支持')));
+    expect(readme, isNot(contains('版本说明（设计）')));
+    expect(File('docs/versions/0.3.0.md').existsSync(), true);
     expect(
       File('docs/architecture.md').readAsStringSync(),
-      contains('v0.2.0 变更'),
+      contains('v0.3.0 变更'),
     );
     expect(
       File('pubspec.yaml').readAsStringSync(),

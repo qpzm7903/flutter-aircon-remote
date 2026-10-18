@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 
 import '../domain/ac_device.dart';
 import '../domain/ac_state.dart';
+import '../domain/capability_overrides.dart';
 import '../protocol/protocol_registry.dart';
 import '../infrastructure/persistence/device_repository.dart';
 import '../infrastructure/logging/log_service.dart';
@@ -73,6 +74,7 @@ class DeviceListController extends ChangeNotifier {
     required String protocolId,
     required AcState initialState,
     bool pairingConfirmed = false,
+    CapabilityOverrides overrides = CapabilityOverrides.none,
   }) async {
     if (isFull ||
         AcDevice.validateName(name) != null ||
@@ -87,6 +89,7 @@ class DeviceListController extends ChangeNotifier {
         icon: icon,
         protocolId: protocolId,
         state: initialState,
+        overrides: overrides,
         pairingConfirmed: pairingConfirmed,
         sortOrder: _devices.length,
       ),

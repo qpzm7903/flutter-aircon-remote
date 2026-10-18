@@ -6,6 +6,7 @@ final class CapabilityOverrides {
     this.hiddenModes = const {},
     this.hiddenFanSpeeds = const {},
     this.hiddenSwings = const {},
+    this.hiddenHSwings = const {},
     this.minTempC,
     this.maxTempC,
   });
@@ -14,12 +15,14 @@ final class CapabilityOverrides {
   final Set<AcMode> hiddenModes;
   final Set<FanSpeed> hiddenFanSpeeds;
   final Set<VerticalSwing> hiddenSwings;
+  final Set<HorizontalSwing> hiddenHSwings;
   final int? minTempC, maxTempC;
   bool get isEmpty =>
       hiddenFeatures.isEmpty &&
       hiddenModes.isEmpty &&
       hiddenFanSpeeds.isEmpty &&
       hiddenSwings.isEmpty &&
+      hiddenHSwings.isEmpty &&
       minTempC == null &&
       maxTempC == null;
   static const _unset = Object();
@@ -28,6 +31,7 @@ final class CapabilityOverrides {
     Set<AcMode>? hiddenModes,
     Set<FanSpeed>? hiddenFanSpeeds,
     Set<VerticalSwing>? hiddenSwings,
+    Set<HorizontalSwing>? hiddenHSwings,
     Object? minTempC = _unset,
     Object? maxTempC = _unset,
   }) => CapabilityOverrides(
@@ -35,6 +39,7 @@ final class CapabilityOverrides {
     hiddenModes: hiddenModes ?? this.hiddenModes,
     hiddenFanSpeeds: hiddenFanSpeeds ?? this.hiddenFanSpeeds,
     hiddenSwings: hiddenSwings ?? this.hiddenSwings,
+    hiddenHSwings: hiddenHSwings ?? this.hiddenHSwings,
     minTempC: identical(minTempC, _unset) ? this.minTempC : minTempC as int?,
     maxTempC: identical(maxTempC, _unset) ? this.maxTempC : maxTempC as int?,
   );
@@ -42,6 +47,7 @@ final class CapabilityOverrides {
     'hiddenFeatures': hiddenFeatures.map((v) => v.name).toList(),
     'hiddenModes': hiddenModes.map((v) => v.name).toList(),
     'hiddenFanSpeeds': hiddenFanSpeeds.map((v) => v.name).toList(),
+    'hiddenHSwings': hiddenHSwings.map((v) => v.name).toList(),
     'hiddenSwings': hiddenSwings.map((v) => v.name).toList(),
     'minTempC': minTempC,
     'maxTempC': maxTempC,
@@ -55,6 +61,7 @@ final class CapabilityOverrides {
       hiddenFeatures: read('hiddenFeatures', AcFeature.values),
       hiddenModes: read('hiddenModes', AcMode.values),
       hiddenFanSpeeds: read('hiddenFanSpeeds', FanSpeed.values),
+      hiddenHSwings: read('hiddenHSwings', HorizontalSwing.values),
       hiddenSwings: read('hiddenSwings', VerticalSwing.values),
       minTempC: json['minTempC'] is int ? json['minTempC'] as int : null,
       maxTempC: json['maxTempC'] is int ? json['maxTempC'] as int : null,
@@ -67,6 +74,7 @@ final class CapabilityOverrides {
       _same(hiddenModes, other.hiddenModes) &&
       _same(hiddenFanSpeeds, other.hiddenFanSpeeds) &&
       _same(hiddenSwings, other.hiddenSwings) &&
+      _same(hiddenHSwings, other.hiddenHSwings) &&
       minTempC == other.minTempC &&
       maxTempC == other.maxTempC;
   static bool _same(Set<Object> a, Set<Object> b) =>
@@ -77,6 +85,7 @@ final class CapabilityOverrides {
     Object.hashAllUnordered(hiddenModes),
     Object.hashAllUnordered(hiddenFanSpeeds),
     Object.hashAllUnordered(hiddenSwings),
+    Object.hashAllUnordered(hiddenHSwings),
     minTempC,
     maxTempC,
   );

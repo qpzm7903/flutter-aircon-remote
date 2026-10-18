@@ -37,6 +37,133 @@ void main() {
       devices: devices,
     );
   });
+  test(
+    'v3 horizontal, Fahrenheit units/steps, cycling and one-shot WiFi',
+    () async {
+      await c.init();
+      await c.setHorizontalSwing(HorizontalSwing.maxRight);
+      expect(ir.sent.last.debugHex.split(' ')[4], '60');
+      await c.setUseFahrenheit(true);
+      expect(c.state.targetTempF, 79);
+      await c.stepTemp(1);
+      expect(c.state.targetTempF, 80);
+      await c.setUseFahrenheit(false);
+      expect(c.state.targetTempC, 27);
+      for (final d in [
+        TempDisplay.setpoint,
+        TempDisplay.indoor,
+        TempDisplay.outdoor,
+        TempDisplay.off,
+      ]) {
+        await c.cycleTempDisplay();
+        expect(c.state.tempDisplay, d);
+      }
+      ir.delay = const Duration(milliseconds: 10);
+      final count = ir.sent.length;
+      await Future.wait([c.pressWifi(), c.pressWifi(), c.stepTemp(1)]);
+      final frames = ir.sent
+          .skip(count)
+          .map((f) => int.parse(f.debugHex.split(' ')[5], radix: 16))
+          .toList();
+      expect(frames.where((b) => b & 64 != 0).length, 1);
+      expect(c.state.wifiPulse, false);
+      await c.stepTemp(1);
+      expect(int.parse(ir.sent.last.debugHex.split(' ')[5], radix: 16) & 64, 0);
+    },
+  );
+  test(
+    'injected clock timer folding, expiry on init and hidden neutralization',
+    () async {
+      c.dispose();
+      var now = 100000;
+      c = RemoteController(
+        deviceId: 'd1',
+        registry: devices.registry,
+        transmitter: ir,
+        devices: devices,
+        nowMs: () => now,
+      );
+      await c.init();
+      await c.setTimer(90);
+      expect(c.state.timerSetAtMs, now);
+      now += 31 * 60000;
+      await c.stepTemp(1);
+      expect(c.state.timerMinutes, 60);
+      expect(c.state.timerSetAtMs, now);
+      now += 61 * 60000;
+      final count = ir.sent.length;
+      await c.init();
+      expect(c.state.timerMinutes, 0);
+      expect(ir.sent.length, count);
+      await c.setHorizontalSwing(HorizontalSwing.left);
+      await c.setTimer(60);
+      await c.setUseFahrenheit(true);
+      final before = ir.sent.length;
+      await devices.update(
+        devices
+            .byId('d1')!
+            .copyWith(
+              overrides: const CapabilityOverrides(
+                hiddenFeatures: {
+                  AcFeature.swingH,
+                  AcFeature.timer,
+                  AcFeature.fahrenheit,
+                },
+              ),
+            ),
+      );
+      expect(c.state.horizontalSwing, HorizontalSwing.off);
+      expect(c.state.timerMinutes, 0);
+      expect(c.state.targetTempF, null);
+      expect(ir.sent.length, before);
+      await c.stepTemp(1);
+      expect(ir.sent.last.debugHex.split(' ')[4], '00');
+    },
+  );
+  test('second WiFi press during transmission is ignored', () async {
+    await c.init();
+    ir.delay = const Duration(milliseconds: 20);
+    final first = c.pressWifi();
+    expect(c.state.wifiPulse, true);
+    expect(ir.active, 1);
+    await c.pressWifi();
+    await first;
+    expect(ir.sent, hasLength(1));
+    expect(c.state.wifiPulse, false);
+  });
+  test(
+    'override changes during WiFi never cache or restore the pulse',
+    () async {
+      await c.init();
+      ir.delay = const Duration(milliseconds: 20);
+      final first = c.pressWifi();
+      expect(c.state.wifiPulse, true);
+      await devices.update(
+        c.device.copyWith(overrides: const CapabilityOverrides(maxTempC: 28)),
+      );
+      expect(devices.byId('d1')!.state.wifiPulse, false);
+      await first;
+      expect(repo.states['d1']!.wifiPulse, false);
+      await c.init();
+      expect(c.state.wifiPulse, false);
+      expect(ir.sent, hasLength(1));
+    },
+  );
+  test('failed WiFi is cleared without retry', () async {
+    await c.init();
+    ir.failure = const IrTransmitException(
+      IrErrorCode.transmitFailed,
+      'failed',
+    );
+    await c.pressWifi();
+    expect(c.state.wifiPulse, false);
+    expect(devices.byId('d1')!.state.wifiPulse, false);
+    await c.init();
+    expect(c.state.wifiPulse, false);
+    ir.failure = null;
+    await c.stepTemp(1);
+    expect(int.parse(ir.sent.last.debugHex.split(' ')[5], radix: 16) & 64, 0);
+  });
   tearDown(() {
     c.dispose();
     devices.dispose();

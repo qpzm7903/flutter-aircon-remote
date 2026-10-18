@@ -1,4 +1,5 @@
 import 'ac_enums.dart';
+import 'fahrenheit_step.dart';
 import 'ac_state.dart';
 import 'capability_overrides.dart';
 
@@ -25,8 +26,25 @@ class AcCapabilities {
     required this.tempDisplays,
     required this.features,
     required this.modeRules,
+    this.horizontalSwings = const [],
+    this.fahrenheitSteps = const [],
+    this.timerStepMinutes = 0,
+    this.maxTimerMinutes = 0,
     this.suppressedFeatures = const {},
   });
+  final List<HorizontalSwing> horizontalSwings;
+  final List<FahrenheitStep> fahrenheitSteps;
+  final int timerStepMinutes, maxTimerMinutes;
+  bool get supportsFahrenheit => fahrenheitSteps.isNotEmpty;
+  int? fahrenheitFor(int c) =>
+      fahrenheitSteps.where((s) => s.c == c).firstOrNull?.f;
+  FahrenheitStep _nearest(int f) => fahrenheitSteps.reduce(
+    (a, b) => (a.f - f).abs() <= (b.f - f).abs() ? a : b,
+  );
+  int celsiusFor(int f) => _nearest(f).c;
+  ({int min, int max})? get fahrenheitRange => supportsFahrenheit
+      ? (min: fahrenheitSteps.first.f, max: fahrenheitSteps.last.f)
+      : null;
   final int minTempC, maxTempC;
   final List<AcMode> modes;
   final List<FanSpeed> fanSpeeds;
@@ -58,6 +76,16 @@ class AcCapabilities {
       hi = maxTempC;
     }
     return AcCapabilities(
+      horizontalSwings: horizontalSwings
+          .where(
+            (v) => v == HorizontalSwing.off || !o.hiddenHSwings.contains(v),
+          )
+          .toList(),
+      fahrenheitSteps: fahrenheitSteps
+          .where((s) => s.c >= lo && s.c <= hi)
+          .toList(),
+      timerStepMinutes: timerStepMinutes,
+      maxTimerMinutes: maxTimerMinutes,
       minTempC: lo,
       maxTempC: hi,
       modes: ms.isEmpty ? modes : ms,
@@ -80,8 +108,35 @@ class AcCapabilities {
     final rule = modeRules[mode]!;
     final n = s.copyWith(mode: mode);
     bool enabled(AcFeature f) => isFeatureEnabled(n, f);
+    final fOn =
+        s.useFahrenheit && enabled(AcFeature.fahrenheit) && supportsFahrenheit;
+    final f = fOn
+        ? (rule.fixedTempC != null
+              ? fahrenheitFor(rule.fixedTempC!) ?? _nearest(s.targetTempF!).f
+              : _nearest(s.targetTempF!).f)
+        : null;
+    final m =
+        enabled(AcFeature.timer) &&
+            timerStepMinutes > 0 &&
+            s.timerSetAtMs != null
+        ? ((s.timerMinutes ~/ timerStepMinutes) * timerStepMinutes).clamp(
+            0,
+            maxTimerMinutes,
+          )
+        : 0;
     return n.copyWith(
-      targetTempC: rule.fixedTempC ?? s.targetTempC.clamp(minTempC, maxTempC),
+      horizontalSwing:
+          enabled(AcFeature.swingH) &&
+              horizontalSwings.contains(s.horizontalSwing)
+          ? s.horizontalSwing
+          : HorizontalSwing.off,
+      targetTempF: f,
+      timerMinutes: m,
+      timerSetAtMs: m > 0 ? s.timerSetAtMs : null,
+      wifiPulse: enabled(AcFeature.wifi) && s.wifiPulse,
+      targetTempC: f != null
+          ? celsiusFor(f)
+          : rule.fixedTempC ?? s.targetTempC.clamp(minTempC, maxTempC),
       fan:
           rule.fixedFan ??
           (fanSpeeds.contains(s.fan) ? s.fan : fanSpeeds.first),
