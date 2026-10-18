@@ -15,6 +15,15 @@
 - [x] M6：中文 Material 3 单页、长按调温、能力驱动控件、无红外提示、诊断。
 - [x] M7：本地 analyze / test / release APK 验收。
 
+## v0.2.0（设计已完成，待实现；详见 docs/versions/0.2.0.md 与 architecture §12–§19）
+
+- [ ] M8：领域——`AcMode.econo`、`AcDevice`、`CapabilityOverrides`、`restrictedBy` 与中性值归一化、`explainControls`。
+- [ ] M9：协议——Gree YX1FSF、按变体能力声明、`pairingProbe` / `modelNote`、新向量、registry 三变体。
+- [ ] M10：基础设施——`DeviceRepository`（schema v2）、`LegacyV1Migrator`、`RemoteRepository` 缩减为主题。
+- [ ] M11：应用层——`DeviceListController`、每设备 `RemoteController`、`RemoteSessionFactory`、`DeviceSettingsController`、`AddDeviceWizard` 状态机与控制器、`DiagnosticsController`。
+- [ ] M12：表现层——首页列表（空状态/增删改/排序）、添加空调向导、设备设置、按钮说明、遥控页去掉协议下拉。
+- [ ] M13：收尾——版本 0.2.0（pubspec / 常量 / README / version_test）、架构测试更新、analyze / test / release APK 验收。
+
 ## 本地验收结果（2026-10-18）
 
 - `flutter pub get` 成功。

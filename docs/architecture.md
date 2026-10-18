@@ -1,6 +1,8 @@
 # flutter-aircon-remote 架构设计
 
-> 状态：设计稿 v1（对应首个版本 0.1.0）。本文档是实现（Codex）的唯一依据；
+**v0.2.0 变更**：新增「多空调设备」(AcDevice / 首页列表 / 每台独立状态)、「添加空调 / 配对测试」向导（红外单向，无法自动发现）、协议型号移入设备设置并新增 Gree YX1FSF、按设备的能力覆盖 CapabilityOverrides 与「按钮说明」、持久化 schema v2 + v0.1 迁移。详见 §12–§19 与 `docs/versions/0.2.0.md`；§2/§3/§5/§7/§8/§9/§11 中带「v0.2.0 修订」标记处以新章节为准。
+
+> 状态：设计稿 v2（v0.1.0 为 v1；本稿增补 0.2.0）。本文档是实现（Codex）的唯一依据；
 > 文中类/文件/常量名即最终命名，代码标识符一律英文，说明为中文。
 > 参考资料：`/workspace/refs/irremote/ir_Gree.{h,cpp}`、`ir_Gree_test.cpp`（IRremoteESP8266），
 > 以及同作者的 `flutter-snake / tetris / music / bilibili-downloader-d4-qwen-code`。
@@ -21,9 +23,9 @@
 - 协议层为纯 Dart，可在无设备环境下 100% 单元测试，并对照 IRremoteESP8266 已知正确的字节向量。
 
 ### 1.2 非目标（0.1.0 不做）
-- iOS / Windows / Web / 桌面；多设备/多房间配置档案；红外学习（接收）。
+- iOS / Windows / Web / 桌面；红外学习（接收）。（v0.2.0 修订：多设备档案已纳入 0.2.0，见 §12。）
 - 定时器（timer）、华氏度、Wi-Fi 位、I-Feel、Econo 位、水平扫风：协议里固定写 0（见 §5.3）。
-- 读取空调真实状态（红外单向，无反馈；界面显示的是“假定状态”）。
+- 读取空调真实状态、**自动发现/检测空调**（红外单向，无反馈；界面显示的是“假定状态”；0.2.0 用「配对测试」向导替代，见 §13）。
 - 国际化：仅简体中文，字符串集中在 `presentation/strings.dart`，日后可替换为 l10n。
 - 外接红外设备（USB/音频口）。
 
@@ -53,13 +55,17 @@ flowchart TB
         P2[AppTheme / strings]
     end
     subgraph APP[application 应用层 - ChangeNotifier]
-        A1[RemoteController]
+        A1[RemoteController 每设备一个]
         A2[ThemeController]
+        A3[DeviceListController]
+        A4[AddDeviceWizard 状态机 + 控制器]
+        A5[DeviceSettingsController]
     end
     subgraph DOM[domain 领域层 - 纯 Dart 值对象]
         D1[AcState / 枚举]
         D2[AcCapabilities / ModeRule]
         D3[IrFrame]
+        D4[AcDevice / CapabilityOverrides / 按钮说明]
     end
     subgraph PROTO[protocol 协议层 - 纯 Dart 编码器]
         PR1[AcProtocol 接口 + AcProtocolRegistry]
@@ -69,7 +75,8 @@ flowchart TB
         I1[IrTransmitter 接口]
         I2[MethodChannelIrTransmitter]
         I3[FakeIrTransmitter]
-        I4[RemoteRepository 接口 + SharedPrefs 实现]
+        I4[RemoteRepository 仅主题 + DeviceRepository 接口 + SharedPrefs 实现]
+        I6[LegacyV1Migrator]
         I5[LogService]
     end
     subgraph NATIVE[Android 原生 Kotlin]
@@ -82,6 +89,11 @@ flowchart TB
     A1 --> PR1
     A1 -->|依赖抽象| I1
     A1 -->|依赖抽象| I4
+    A3 -->|依赖抽象| I4
+    A4 --> A3
+    A1 --> A3
+    A5 --> A3
+    I4 --> I6
     PR1 --> D1
     PR1 --> D2
     PR1 --> D3
@@ -96,14 +108,16 @@ flowchart TB
 **依赖规则（必须遵守，由 `test/architecture_test.dart` 以 import 扫描方式强制）**
 1. `domain` 不依赖任何其他层，也不 import `package:flutter`（纯 Dart，`dart:convert` 除外）。
 2. `protocol` 只依赖 `domain`；不得 import `flutter`、`dart:io`、platform channel。
-3. `infrastructure` 只依赖 `domain`（用到 `IrFrame`/`AcState`）与平台 API；不得依赖 `protocol` / `application`。
+3. `infrastructure` 只依赖 `domain`（用到 `IrFrame`/`AcState`/`AcDevice`）、`core` 与平台 API；不得依赖 `protocol` / `application`。
+   （v0.2.0 修订：`LegacyV1Migrator` 不得知道协议注册表，仅收到字符串 `fallbackProtocolId`。）
 4. `application` 依赖 `domain`、`protocol` 接口、`infrastructure` **接口**；不 import `package:flutter/material.dart`
    （可 import `package:flutter/foundation.dart` 取 `ChangeNotifier`）。
 5. `presentation` 只依赖 `application` 与 `domain`（读取枚举/能力）；不得直接触碰 `protocol` 具体类或 `infrastructure`
    （`DiagnosticsSheet` 经 `RemoteController` 暴露的 `logSnapshot()` 取日志，不直接 import `LogService`）。
+   （v0.2.0 修订：日志改经 `DiagnosticsController`；协议信息经 application 的 `ProtocolOption` 视图类暴露，presentation 仍不得 import `protocol/`。）
 6. 依赖注入集中在 `main.dart`（composition root）；所有具体实现在此装配，其余位置只见接口。
 
-数据流：用户操作 → `RemoteController` 修改 `AcState`（经 `AcCapabilities.normalize`）→ 持久化 →
+数据流（v0.2.0 修订：这里的 `AcCapabilities` 是**有效能力** = 协议能力 ∩ 设备覆盖，见 §12.3）：用户操作 → `RemoteController` 修改 `AcState`（经 `AcCapabilities.normalize`）→ 持久化 →
 `AcProtocol.encode` 得到 `IrFrame` → `IrTransmitter.transmit` → Kotlin `ConsumerIrManager.transmit`。
 
 ---
@@ -116,12 +130,15 @@ lib/
 ├─ main.dart                              # composition root：初始化日志、装配依赖、runApp
 ├─ app.dart                               # AircondRemoteApp：MultiProvider + MaterialApp(theme/darkTheme)
 ├─ core/
-│  └─ constants.dart                      # AppConstants { appName, version='0.1.0', irChannelName, prefsKeys }
+│  └─ constants.dart                      # AppConstants { appName, version='0.2.0', irChannelName, schema/设备 prefs keys }（v0.2.0 修订）
 ├─ domain/
 │  ├─ ac_enums.dart                       # AcMode, FanSpeed, VerticalSwing, TempDisplay, AcFeature
 │  ├─ ac_state.dart                       # AcState 不可变值对象 + JSON
 │  ├─ ac_capabilities.dart                # AcCapabilities, ModeRule, normalize()
-│  └─ ir_frame.dart                       # IrFrame：carrierHz + patternMicros（+ 校验）
+│  ├─ ir_frame.dart                       # IrFrame：carrierHz + patternMicros（+ 校验）
+│  ├─ ac_device.dart                      # 〔v0.2.0〕AcDevice, AcIcon
+│  ├─ capability_overrides.dart           # 〔v0.2.0〕CapabilityOverrides（AcCapabilities.restrictedBy 在 ac_capabilities.dart）
+│  └─ capability_explainer.dart           # 〔v0.2.0〕explainControls() 纯函数，供「按钮说明」
 ├─ protocol/
 │  ├─ ac_protocol.dart                    # abstract interface class AcProtocol
 │  ├─ protocol_registry.dart              # AcProtocolRegistry（品牌/型号列表、byId）
@@ -138,23 +155,36 @@ lib/
 │  │  ├─ method_channel_ir_transmitter.dart
 │  │  └─ fake_ir_transmitter.dart         # 记录发送帧，可注入失败；测试与 --dart-define=FAKE_IR=true 使用
 │  ├─ persistence/
-│  │  ├─ remote_repository.dart           # abstract RemoteRepository + PersistedRemote
-│  │  └─ shared_prefs_remote_repository.dart
+│  │  ├─ remote_repository.dart           # abstract RemoteRepository + PersistedRemote（v0.2.0 修订：仅主题）
+│  │  ├─ shared_prefs_remote_repository.dart
+│  │  ├─ device_repository.dart           # 〔v0.2.0〕abstract DeviceRepository
+│  │  ├─ shared_prefs_device_repository.dart # 〔v0.2.0〕schema v2 JSON
+│  │  └─ legacy_v1_migrator.dart          # 〔v0.2.0〕v0.1 -> v2 一次性迁移
 │  └─ logging/
 │     └─ log_service.dart                 # 按日落盘日志，风格同 flutter-snake 的 LogService
 ├─ application/
-│  ├─ remote_controller.dart              # RemoteController：状态、协议、IR 可用性、发送串行化
-│  ├─ remote_event.dart                   # sealed RemoteEvent（一次性事件：发送成功/失败）
+│  ├─ remote_controller.dart              # RemoteController：〔v0.2.0 修订：每台设备一个〕状态、IR 可用性、发送串行化
+│  ├─ remote_event.dart                   # sealed RemoteEvent（一次性事件：发送成功/失败/设备被删除）
+│  ├─ remote_session_factory.dart         # 〔v0.2.0〕按 deviceId 创建 RemoteController
+│  ├─ device_list_controller.dart         # 〔v0.2.0〕设备 CRUD / 排序 / 状态落盘的唯一入口
+│  ├─ device_settings_controller.dart     # 〔v0.2.0〕设置页草稿、有效能力预览、ProtocolOption
+│  ├─ add_device_wizard.dart              # 〔v0.2.0〕纯状态机 AddDeviceWizard（WizardState/Event/Effect）
+│  ├─ add_device_wizard_controller.dart   # 〔v0.2.0〕执行 effect（发探测帧）的 ChangeNotifier
+│  ├─ diagnostics_controller.dart         # 〔v0.2.0〕转发 LogService（从 RemoteController 迁出）
 │  └─ theme_controller.dart               # ThemeController：主题模式名持久化（String，不含 Flutter 类型）
 └─ presentation/
    ├─ strings.dart                        # 所有中文文案常量
    ├─ theme/app_theme.dart                # 亮/暗 ThemeData（Material 3, seedColor）
    ├─ pages/
-   │  ├─ remote_page.dart                 # 唯一主界面
+   │  ├─ home_page.dart                   # 〔v0.2.0〕空调列表（首页）：空状态/增删改/拖拽排序/主题/诊断
+   │  ├─ remote_page.dart                 # 某台空调的遥控页（AppBar 显示设备名）
+   │  ├─ add_device_page.dart             # 〔v0.2.0〕添加空调 / 配对测试向导（也用于重新配对）
+   │  ├─ device_settings_page.dart        # 〔v0.2.0〕名称/房间/图标、遥控协议型号、功能显示开关、删除
+   │  ├─ control_help_sheet.dart          # 〔v0.2.0〕按钮说明
    │  └─ diagnostics_sheet.dart           # 底部弹窗：版本、日志路径、最近日志、复制
    └─ widgets/
       ├─ no_ir_banner.dart
-      ├─ brand_selector.dart              # 品牌/型号下拉
+      ├─ （v0.2.0 删除 brand_selector.dart；协议型号下拉移入 device_settings_page）
       ├─ power_button.dart
       ├─ temperature_display.dart         # 大号温度 + (−/+) 按钮，长按连发
       ├─ mode_selector.dart               # SegmentedButton，选项由 capabilities 决定
@@ -187,11 +217,14 @@ test/
 │  └─ remote_controller_test.dart         # FakeIrTransmitter + InMemory repo
 ├─ presentation/
 │  └─ remote_page_test.dart               # 无 IR 横幅、控件随 capabilities 显隐/禁用
+├─ （v0.2.0 新增/修改的测试文件完整清单见 §18）
 ├─ architecture_test.dart                 # 扫描 lib/ 的 import，校验 §2 依赖规则
 └─ version_test.dart                      # AppConstants.version == pubspec.yaml 的 version
 ```
 
 ### 3.3 关键接口签名（仅接口，实现由 Codex 完成）
+
+> v0.2.0 修订：`AcMode` 追加 `econo`；`AcProtocol` 追加 `modelNote`、`pairingProbe`；`RemoteRepository` 仅保留主题；`RemoteController` 改为每设备一个。以 §12–§15 的签名为准，下方 0.1.0 签名中相应部分作废。
 
 ```dart
 // ---- domain/ac_enums.dart ----
@@ -445,7 +478,7 @@ void appendBitsLsbFirst(List<int> out, int value, int bitCount, PulseTimings t);
 | 2 | 0–3 | TimerHours | 固定 0 |
 | 2 | 4 | Turbo | `turbo` |
 | 2 | 5 | Light | `light` |
-| 2 | 6 | ModelA | `power && model == yaw1f`（**关机时为 0**，见 Issue814 向量） |
+| 2 | 6 | ModelA | `power && model == yaw1f`（**关机时为 0**，见 Issue814 向量）；v0.2.0：`power && (model == yaw1f || model == yx1fsf)`（§17） |
 | 2 | 7 | Xfan | `xfan` |
 | 3 | 0–1 | — | 0 |
 | 3 | 2 | TempExtraDegreeF | 0 |
@@ -478,13 +511,15 @@ checksum = sum & 0x0F                        // 写入 bytes[7] 高 4 位：byte
 `19 0A 60 50 02 23 00 F0` → 10+9+10+0+0+0+2+0=31 → 0xF ✓；
 `59 07 60 50 01 20 00 C0` → 10+9+7+0+0+0+2+0=28 → 0xC ✓。
 
-### 5.4 YAW1F 与 YBOFB 的差异
+### 5.4 YAW1F / YBOFB / YX1FSF 的差异
 仅 byte2 bit6（ModelA）：YAW1F 开机时为 1，YBOFB 恒为 0；关机时两者都为 0。其他位相同。
+**v0.2.0 修订**：新增 YX1FSF，编码规则见 §17（ModelA 同 YAW1F；额外允许 Mode=5 Econo）。
 
 ### 5.5 `GreeProtocol` 行为摘要
 `encode(s)`：`n = capabilities.normalize(s)` → `bytes = codec.encode(n)` → `pattern = builder.build(bytes)` →
 `IrFrame(carrierHz: 38000, patternMicros: pattern, debugHex: hex(bytes))`，并调用 `frame.validate()`。
 `defaultState` = `capabilities.normalize(const AcState.initial())`。
+**v0.2.0 修订**：`encode` 内的 `normalize` 仅使用协议能力；设备覆盖由调用方（`RemoteController`）先行 normalize（§12.4）。
 
 ### 5.6 测试策略（必须全部通过，且不依赖设备）
 `test/support/gree_vectors.dart` 提供 `class GreeVector { name, model, AcState state, List<int> bytes }`，
@@ -569,8 +604,10 @@ Dart 侧 `MethodChannelIrTransmitter`：`hasIrEmitter` 遇 `MissingPluginExcepti
 final registry = AcProtocolRegistry([
   GreeProtocol(GreeModel.yaw1f),   // 第一个 = fallback / 默认
   GreeProtocol(GreeModel.ybofb),
+  GreeProtocol(GreeModel.yx1fsf),  // v0.2.0 追加；顺序 = 配对测试的尝试顺序
 ]);
 ```
+> v0.2.0 修订：`AcProtocolRegistry` 追加 `String brandNameOf(String brandId)`；`modelsOf(brand)` 的顺序即向导尝试顺序（§13）。
 **新增品牌（如 Midea）步骤**
 1. 在 `lib/protocol/midea/` 新建 `midea_constants.dart`、`midea_state_codec.dart`（AcState→字节）、
    `midea_pulse_builder.dart`（复用 `pulse/pulse_timing.dart`）、`midea_protocol.dart`（`implements AcProtocol`，声明 `id='midea.default'` 与 `AcCapabilities`）。
@@ -579,13 +616,14 @@ final registry = AcProtocolRegistry([
 4. **不修改** `domain/`、`application/`、`presentation/`、`infrastructure/`：UI 完全由 `AcCapabilities` 驱动。
    若新品牌需要新的领域概念（如水平扫风），先在 `AcState`/`AcFeature` 增字段（bump JSON `v`，`fromJson` 保持向后兼容），再让相关协议声明能力。
 
-`AcProtocol.id` 一经发布不可改（它是持久化键的一部分）。
+`AcProtocol.id` 一经发布不可改（它是设备记录 `protocolId` 的取值；0.1.0 中还是状态键的一部分）。
 
 ---
 
 ## 8. 状态管理与持久化流程
 
 ### 8.1 持久化（`SharedPrefsRemoteRepository`）
+> **v0.2.0 修订**：协议 id 与按协议状态的存储作废，改为按设备存储（§14）；`SharedPrefsRemoteRepository` 仅保留 `ui.themeMode`。`RemoteController` 的 `setProtocol` 与按协议状态表作废，改为 §15.3。以下为 0.1.0 原文，仅供迁移参考。
 | key | 值 |
 |---|---|
 | `remote.protocolId` | `String`，当前协议 id |
@@ -656,6 +694,8 @@ sequenceDiagram
 ---
 
 ## 9. UI 设计
+
+> **v0.2.0 修订**：本页 AppBar 的品牌/型号下拉**移除**；主题与诊断入口移到首页；遥控页 AppBar 显示设备名，右侧为「按钮说明」「设备设置」。新增页面与控件显隐规则见 §16。以下为 0.1.0 单页设计原文。
 
 单页 `RemotePage`（`Scaffold`，Material 3，竖屏优先；宽屏下内容限宽 480 并居中）。
 
@@ -786,7 +826,7 @@ android {
 | M6 | 表现层 | 主题、`RemotePage` 与各控件、`NoIrBanner`、`DiagnosticsSheet`；widget 测试；`main.dart / app.dart` 装配 |
 | M7 | 收尾 | `architecture_test`、`version_test`、README（使用说明/权限/设备要求/下载）、`plan.md` 标记完成、推送触发 CI 验证 |
 
-### 11.2 完成定义（Definition of Done，0.1.0）
+### 11.2 完成定义（Definition of Done，0.1.0；0.2.0 见 §19）
 1. `flutter analyze` 零 warning/error；`flutter test` 全绿，包含 §5.6 的全部 Gree 向量、校验和、脉冲、registry、controller、widget、架构与版本一致性测试。
 2. 依赖规则（§2）由 `architecture_test` 自动校验通过。
 3. GitHub Actions 在 push/PR 上 `test` + `build-android` 成功并上传 `*-android-aarch64.apk`；打 `v0.1.0` 标签后自动创建 Release；无 Windows 任务。
@@ -801,3 +841,439 @@ android {
 - 模式×特性约束表（§4.2）为保守取值，需真机微调；调整只改 `GreeProtocol` 内的表与对应测试。
 - 个别 OEM 的 `ConsumerIrManager.transmit` 会阻塞或频率区间异常；已通过单线程执行器与 `UNSUPPORTED_FREQUENCY` 校验缓解，错误原样记入日志。
 - 红外无反馈，界面状态与空调真实状态可能漂移（例如用实体遥控器改过）；用户再按任意键即以完整状态重新同步。
+
+---
+
+# v0.2.0 设计增补（§12–§19）
+
+## 12. 设备模型与能力：协议 ∩ 用户覆盖
+
+### 12.0 背景与根因
+v0.1 没有「设备」概念。遥控页品牌下拉里的「格力 Gree / YAW1F」「格力 Gree / YBOFB」是**同一品牌的两种遥控协议变体**，被用户误读为“搜到两台空调”。
+红外是单向的：手机只能发、不能收，**无法发现或检测空调**。因此 0.2.0：①引入设备（一台空调 = 一条记录，用户自己命名）；②用「配对测试」向导（§13）代替不可能的自动检测；③协议型号只作为设备的一个属性，在设置里叫「遥控协议型号」。
+
+### 12.1 `AcDevice`（`domain/ac_device.dart`，纯 Dart，不可变，值相等）
+```dart
+enum AcIcon { generic, bedroom, living, study, kitchen, kids, office }   // 持久化用 name；UI 映射到 Material Icons
+
+final class AcDevice {
+  const AcDevice({required this.id, required this.name, this.room, this.icon = AcIcon.generic,
+      required this.protocolId, this.overrides = CapabilityOverrides.none, required this.state,
+      this.sortOrder = 0, this.pairingConfirmed = false});
+  final String id;                 // 不可变，创建时由 DeviceIdGenerator 生成（形如 'd1739000000000123'），迁移设备固定为 'legacy-1'
+  final String name;               // 必填，trim 后 1..AcDevice.maxNameLength(20)，如 主卧/书房/客厅；允许重名（不强制唯一）
+  final String? room;              // 可选，trim 后 1..20，空串存为 null；列表副标题显示
+  final AcIcon icon;
+  final String protocolId;         // = brand + variant，如 'gree.yaw1f'
+  final CapabilityOverrides overrides;
+  final AcState state;             // 该设备的“假定状态”，每台独立持久化
+  final int sortOrder;             // 升序；Repository 保存时重排为 0..n-1
+  final bool pairingConfirmed;     // 是否做过且用户确认“有响应”；迁移设备为 false；仅用于提示，不影响功能
+  static const maxNameLength = 20, maxRoomLength = 20;
+  static String? validateName(String raw);   // 返回 null 表示合法，否则错误码 'empty'|'tooLong'（presentation 映射文案）
+  AcDevice copyWith({...});  Map<String, Object?> toMetaJson();   // 不含 state
+  factory AcDevice.fromMetaJson(Map<String, Object?> json, {required AcState state});  // 容错：缺字段取默认，name 为空→'我的空调'，未知 icon→generic
+}
+```
+`DeviceListController.maxDevices = 20`（`AppConstants.maxDevices`），达到上限时首页「添加」按钮禁用并提示。
+
+### 12.2 `CapabilityOverrides`（`domain/capability_overrides.dart`）
+用户对“协议已支持的功能”做减法（隐藏），**永远不能新增协议没有的能力**。
+```dart
+final class CapabilityOverrides {
+  const CapabilityOverrides({this.hiddenFeatures = const {}, this.hiddenModes = const {},
+      this.hiddenFanSpeeds = const {}, this.hiddenSwings = const {}, this.minTempC, this.maxTempC});
+  static const none = CapabilityOverrides();
+  final Set<AcFeature> hiddenFeatures;     // 如 light（没有指示灯）/ xfan / turbo / sleep / tempDisplay
+  final Set<AcMode> hiddenModes;           // 如 空调不支持制热 → hide heat
+  final Set<FanSpeed> hiddenFanSpeeds;
+  final Set<VerticalSwing> hiddenSwings;   // “无扫风”= 隐藏除 off 外的全部；VerticalSwing.off 不可隐藏（忽略）
+  final int? minTempC, maxTempC;           // 缩小可调温度范围，如 18..28；null=协议默认
+  bool get isEmpty;
+  CapabilityOverrides copyWith({...});  Map<String, Object?> toJson();
+  factory CapabilityOverrides.fromJson(Object? json);   // 容错：非 Map→none；集合内未知名字丢弃；非 int 温度→null
+}
+```
+JSON 示例：`{"hiddenFeatures":["light"],"hiddenModes":[],"hiddenFanSpeeds":[],"hiddenSwings":["highest","lowest"],"minTempC":18,"maxTempC":null}`。
+
+### 12.3 有效能力（Effective Capabilities）— 按钮如何决定（回应“按钮是写死的吗？”）
+**不是写死在界面里的**。界面上每个按钮是否出现/可点，由三层依次决定：
+
+1. **协议层声明**（每个协议变体各自声明，`AcProtocol.capabilities`）：支持的模式、风速、扫风位置、功能集合 `features`、温度范围，以及每个模式下的约束 `ModeRule`（如自动模式固定 25 °C、除湿锁低风、送风不可调温、哪些功能在该模式可用）。YAW1F / YBOFB / YX1FSF 的声明各自独立（YX1FSF 多一个 `econo` 模式）。
+2. **设备覆盖**（`AcDevice.overrides`，设置页开关）：对 1 的结果做减法。
+3. **当前状态约束**（`ModeRule`）：只改变“可点/灰色”，不改变“显示/隐藏”。
+
+```
+有效能力 effective = protocol.capabilities.restrictedBy(device.overrides)
+显示集合  (visible)  = effective.modes / fanSpeeds / verticalSwings / features / tempDisplays   // 来自 1 ∩ 2
+可点状态  (enabled)  = effective.isFeatureEnabled(state, f) / canEditTemp(state) / canEditFan(state)  // 再叠加 3
+```
+`AcCapabilities.restrictedBy(CapabilityOverrides o) → AcCapabilities`（`domain/ac_capabilities.dart`，纯函数）规则：
+| 字段 | 结果 |
+|---|---|
+| `modes` | `modes − o.hiddenModes`（保持原顺序）；若结果为空则**忽略该覆盖**（至少保留一个模式） |
+| `fanSpeeds` | `fanSpeeds − o.hiddenFanSpeeds`；为空则忽略该覆盖 |
+| `verticalSwings` | `verticalSwings − o.hiddenSwings`，且 `off` 始终保留；长度 ≤ 1（只剩 off）时 UI 隐藏扫风整行 |
+| `features` | `features − o.hiddenFeatures`；且 `suppressedFeatures = o.hiddenFeatures ∩ protocol.features`（见 §12.4） |
+| `tempDisplays` | 不变（由 `tempDisplay ∈ features` 门控） |
+| `minTempC/maxTempC` | `max(原min, o.min)`、`min(原max, o.max)`；若 `min > max` 则忽略温度覆盖 |
+| `modeRules` | 原样保留（含固定温度/固定风速：协议强制值**不受覆盖影响**，如自动模式仍固定 25 °C） |
+`restrictedBy(CapabilityOverrides.none)` 必须与原对象在所有观察上相等；`restrictedBy` 幂等；有效能力恒为协议能力的子集（属性测试）。
+
+`AcCapabilities` 新增字段 `final Set<AcFeature> suppressedFeatures`（默认 `const {}`，构造器可选参数）。
+
+### 12.4 被隐藏的功能如何从发送帧里“归一化”
+`AcCapabilities.normalize` 增补规则：对 `f ∈ suppressedFeatures`，对应状态字段**强制为“中性值”**（而不是“关”），中性值取自 `const AcState.initial()`，即未改动的原厂遥控默认：
+| 被隐藏 | 帧内取值 | 理由 |
+|---|---|---|
+| `turbo` | false | 默认关 |
+| `xfan` | false | 默认关 |
+| `sleep` | false | 默认关 |
+| `health` | false | 默认关（Gree 本就不支持） |
+| `tempDisplay` | `TempDisplay.off` | 默认关 |
+| `light` | **true**（默认=亮，不是关） | 无灯的空调忽略该位；有灯的空调不应被意外熄屏 |
+| 隐藏的模式正是当前模式 | 回落 `effective.modes.first` | 沿用 normalize 现有逻辑 |
+| 隐藏的风速正是当前风速 | 回落 `effective.fanSpeeds.first` | 同上 |
+| 隐藏的扫风位置正是当前位置 | `VerticalSwing.off` | 同上 |
+| 温度超出覆盖范围 | clamp 到 `[min, max]` | 同上 |
+- 与“协议/模式不允许”的区别：模式不允许（`ModeRule.allowedFeatures`）仍是 `false`（沿用 0.1 行为，包括 light）；只有“用户隐藏”才用中性值。
+- 重新显示该功能时**不恢复**隐藏前的值（保持中性值），与 0.1「切换模式后不恢复」一致。
+- **调用顺序（重要）**：`RemoteController` 必须先用**有效能力**对状态 `normalize`，再 `protocol.encode(state)`。`encode` 内部再用协议能力 normalize 一次是幂等的（有效⊆协议，中性值在协议范围内），因此帧不会泄漏隐藏项。设置变更（协议/覆盖）时同样重新 normalize 并落盘，但**不发码**。
+- 配对向导的探测帧只用协议能力，不使用覆盖（§13）。
+
+### 12.5 「按钮说明」数据（`domain/capability_explainer.dart`，纯函数）
+```dart
+enum ControlKind { mode, fanSpeed, verticalSwing, feature, temperature }
+enum ControlStatus { available, hiddenByUser, unsupportedByProtocol, lockedByMode }
+final class ControlExplanation { ControlKind kind; Object? item; /* AcMode|FanSpeed|VerticalSwing|AcFeature|null */ ControlStatus status; }
+List<ControlExplanation> explainControls({required AcCapabilities protocol, required CapabilityOverrides overrides, AcState? state});
+```
+- 对 `AcMode.values`、`FanSpeed.values`、`VerticalSwing.values`（不含 off）、`AcFeature.values`、温度各产出一项。
+- 判定优先级：不在 `protocol` 里 → `unsupportedByProtocol`；在 `overrides` 隐藏集里 → `hiddenByUser`；传入 `state` 且在该状态下被 `ModeRule` 禁用（功能不允许 / 固定风速 / 不可调温）→ `lockedByMode`；否则 `available`。
+- 「按钮说明」面板（`control_help_sheet.dart`，遥控页与设置页均可打开）：顶部三行说明（①按钮由「遥控协议能做的」与「你在设置里保留的」共同决定；②灰色=当前模式下不可用，切模式可恢复；③隐藏的功能发送时保持默认：灯光=亮，其余=关）；下面按类别列出每项及状态徽标（可用 / 已隐藏〔去设置恢复〕/ 此协议不支持 / 当前模式不可用）。文案集中在 `strings.dart`。
+
+## 13. 「添加空调 / 配对测试」向导
+
+### 13.1 原则与文案
+- 向导第一页（`intro`）必须明确：**红外是单向的，手机无法自动发现或检测空调；请把手机顶部红外发射口对准空调接收窗（几米内、无遮挡），按提示做一次测试**。无红外手机时显示 `NoIrBanner`，仍可填写信息，配对步骤只能「跳过」。
+- 向导为纯状态机（`application/add_device_wizard.dart`），**不含任何 IO / Flutter / 计时**；UI 只渲染 `WizardState` 并派发 `WizardEvent`；副作用由 `WizardEffect` 描述，由 `AddDeviceWizardController` 执行。
+- **测试发码不得改动任何持久化状态**：探测帧由控制器直接 `protocol.encode(protocol.pairingProbe)` → `IrTransmitter.transmit`，不经过 `RemoteController`、不调用 `DeviceListController`/Repository；只有 `Complete` 效果（用户点“有响应”/“仍然保存”）才由页面调用 `DeviceListController.add(...)`（创建模式）或返回所选协议 id（重新配对模式，由设置页草稿保存）。
+
+### 13.2 状态机定义
+```dart
+enum WizardMode { create, repair }                       // repair = 从设备设置重新配对
+enum WizardStep { intro, info, brand, pairing }         // create: intro→info→brand→pairing；repair: 直接 pairing
+enum PairingPhase { idle, sending, awaitingAnswer, sendFailed, exhausted }
+
+final class WizardState {                                // 不可变，值相等
+  WizardMode mode; WizardStep step;
+  String name, room; AcIcon icon; bool nameInvalid;      // info 步骤；nameInvalid 在 Next 校验失败时置位
+  String? brandId;                                       // brand 步骤；repair 时 = 原设备品牌
+  List<String> candidateIds;                             // = registry.modelsOf(brandId) 的 id（注册顺序：yaw1f, ybofb, yx1fsf）
+  int candidateIndex;                                    // 当前被测协议
+  PairingPhase phase;
+  int probeSeq;                                          // 每发一次 +1；用于忽略过期的 ProbeResult
+  int resendCount;                                       // 当前候选的重发次数（仅用于 UI）
+  IrErrorCode? sendError;                                // phase==sendFailed 时有值
+  String? selectedFallbackId;                            // exhausted 阶段用户选的型号（默认 candidateIds.first；repair 默认当前协议）
+  bool irAvailable;
+  WizardOutcome? outcome;                                // 非 null = 向导结束，页面据此关闭
+}
+final class WizardOutcome { final String protocolId; final bool pairingConfirmed; /* create 时另带 name/room/icon */ }
+
+sealed class WizardEvent {}
+Next, Back, SetName(String), SetRoom(String), SetIcon(AcIcon), SetBrand(String),
+StartPairing,                 // 进入/重开测试：candidateIndex=0
+ProbeResult(int seq, IrErrorCode? error),   // 控制器发完探测帧后回灌
+AnswerYes, AnswerNo,          // “有响应” / “没反应，试下一个”
+Resend,                       // “重发”
+SelectFallback(String protocolId), SaveFallback,   // exhausted 阶段“仍然保存”
+Skip,                         // 跳过配对（无红外 / 用户不想测）：用第一个候选保存，pairingConfirmed=false
+
+sealed class WizardEffect {}
+SendProbe(int seq, String protocolId), Complete(WizardOutcome)
+
+final class WizardTransition { final WizardState state; final List<WizardEffect> effects; }
+class AddDeviceWizard {                                   // 纯逻辑
+  AddDeviceWizard({required AcProtocolRegistry registry});
+  WizardState initial({required bool irAvailable, AcDevice? repairing});
+  WizardTransition handle(WizardState s, WizardEvent e);  // 确定性、无副作用；非法组合 → 原状态、无 effect（不抛）
+}
+```
+### 13.3 迁移表（`handle` 必须逐条实现并有测试）
+| 当前 | 事件 | 条件 | 结果（state / effects） |
+|---|---|---|---|
+| intro | Next | — | step=info |
+| info | SetName/SetRoom/SetIcon | — | 更新字段；`SetName` 清除 nameInvalid |
+| info | Next | `AcDevice.validateName(name)==null` | step=brand（brandId 缺省=首个品牌） |
+| info | Next | 名称非法 | nameInvalid=true，不前进 |
+| info | Back | — | step=intro |
+| brand | SetBrand(b) | b ∈ brandIds | brandId=b |
+| brand | Next / StartPairing | brandId≠null | step=pairing, phase=idle, candidateIds=modelsOf(brand) |
+| brand | Back | — | step=info |
+| pairing | StartPairing | irAvailable | candidateIndex=0, phase=sending, probeSeq+1, resendCount=0；effect `SendProbe(seq, candidateIds[0])` |
+| pairing | StartPairing | !irAvailable | phase=sendFailed, sendError=noIrEmitter（无 effect；只能 Skip/Back） |
+| pairing/sending | ProbeResult(seq, null) | seq==probeSeq | phase=awaitingAnswer |
+| pairing/sending | ProbeResult(seq, err) | seq==probeSeq | phase=sendFailed, sendError=err |
+| 任意 | ProbeResult | seq≠probeSeq | **忽略**（用户已 Back / 重发） |
+| awaitingAnswer | AnswerYes | — | outcome=(candidateIds[idx], confirmed=true)；effect `Complete(outcome)` |
+| awaitingAnswer | AnswerNo | idx+1 < n | candidateIndex++, phase=sending, probeSeq+1, resendCount=0；effect `SendProbe(下一个)` |
+| awaitingAnswer | AnswerNo | idx+1 == n | phase=exhausted, selectedFallbackId 默认；无 effect |
+| awaitingAnswer / sendFailed | Resend | irAvailable | phase=sending, probeSeq+1, resendCount+1；effect `SendProbe(同一候选)` |
+| exhausted | StartPairing | — | 重新从第一个开始（同 pairing/StartPairing） |
+| exhausted | SelectFallback(id) | id ∈ candidateIds | selectedFallbackId=id |
+| exhausted | SaveFallback | — | outcome=(selectedFallbackId, confirmed=false)；effect `Complete` |
+| pairing（任意 phase） | Skip | — | outcome=(repair? 原协议 : candidateIds.first, confirmed=false)；effect `Complete` |
+| pairing | Back | create | step=brand，phase=idle，probeSeq+1（使在途结果失效） |
+| pairing | Back | repair | 无状态变化；页面直接关闭（取消，不保存） |
+- 取消向导（系统返回键 / 关闭）：页面直接 pop，**不产生任何持久化**。
+- `exhausted` 页内容：说明“三种型号都没有听到响应”；展示排查提示列表 `Strings.pairingTips`（①手机红外口通常在机身顶部，对准空调接收窗，距离几米以内，取下手机壳/遮挡；②确认遥控器上有格力 Gree 标识，且空调电源已接通；③部分空调可在遥控器上关闭提示音/静音，请看面板指示灯是否闪；④可用另一部手机相机对着发射口，发码时能看到红外灯闪烁（部分相机可见）；⑤红外无反馈，**“没反应”也可能是手机无红外/被遮挡**）；下拉选一个型号 + 「仍然保存」「重新测试」。
+- 成功页文案须说明：**采用第一个有响应的型号**；若之后发现某些按键行为不符（如关机无效、灯光异常），可在设备设置中改选其他型号或重新配对；若遥控器上有「节能 Econo」模式键，请在设置中改选 YX1FSF（它与 YAW1F 的非节能帧完全相同，配对测试无法区分，见 §17）。
+- 创建模式的新设备初始状态：`confirmed=true` → `normalize(protocol.pairingProbe)`（空调刚被测试帧打开，开机/制冷/26 °C）；`confirmed=false` → `protocol.defaultState`（关机）。重新配对（repair）**只改 `protocolId`**，状态按新协议能力 normalize，不发码。
+
+### 13.4 `AddDeviceWizardController`（`ChangeNotifier`，application）
+```dart
+class AddDeviceWizardController extends ChangeNotifier {
+  AddDeviceWizardController({required AcProtocolRegistry registry, required IrTransmitter transmitter,
+      required DeviceListController devices, AcDevice? repairing});
+  WizardState get state;
+  Future<void> init();                               // transmitter.hasIrEmitter() → irAvailable → state=machine.initial(...)
+  Future<void> dispatch(WizardEvent e);              // handle → 更新 state → notify → 逐个执行 effects
+  // SendProbe: p=registry.byId(id)!; frame=p.encode(p.pairingProbe); LogService.info('pair | ${p.id} | ${frame.debugHex}');
+  //            try { await transmitter.transmit(frame); dispatch(ProbeResult(seq,null)); }
+  //            on IrTransmitException catch (e) { dispatch(ProbeResult(seq,e.code)); }
+  // Complete(create): await devices.add(name,room,icon,protocolId,initialState,pairingConfirmed) ；repair：不写库，outcome 交给页面 pop(result)
+  Stream<WizardOutcome> get completed;               // 供页面关闭
+}
+```
+同一时刻只允许一个在途探测（`sending` 阶段忽略再次派发的 Resend/Answer*，由状态机表保证）。
+
+### 13.5 探测帧（`AcProtocol.pairingProbe`）
+各 Gree 变体的探测状态：**开机 + 制冷 + 26 °C + 风速自动 + 灯亮 + 其余关**；YX1FSF 为区别于 YAW1F，使用 **Econo 模式 + 26 °C**（其余同上）。字节见 §17.4。探测帧需引起空调“滴”声，故必须是**开机**帧（关机帧在已关机的空调上可能无声）。
+
+## 14. 持久化 schema v2 与迁移
+
+### 14.1 键（`AppConstants`）
+| key | 值 |
+|---|---|
+| `app.schemaVersion` | `int`，v0.2.0 = 2。**最后写入**，作为迁移提交标记 |
+| `device.index` | `String`，`{"v":2,"devices":[<AcDevice.toMetaJson()>...]}`，数组顺序即显示顺序 |
+| `device.state.<deviceId>` | `String`，`jsonEncode(AcState.toJson())`（高频写，独立 key 避免重写整个索引） |
+| `device.index.corrupt` | `String`，索引损坏时备份原文（仅留最近一份） |
+| `ui.themeMode` | 不变 |
+| `remote.protocolId`、`remote.state.*` | v0.1 遗留键：迁移后**保留不删**（便于回滚/排查），v0.2 不再读写 |
+`AcState.toJson()` 的 `'v'` 仍为 1；`AcState.fromJson` 需识别 `mode == 'econo'`（未知枚举名仍回落 cool）。
+
+### 14.2 `DeviceRepository`（`infrastructure/persistence/device_repository.dart`）
+```dart
+abstract interface class DeviceRepository {
+  Future<List<AcDevice>> load();                     // 内部先 LegacyV1Migrator；任何损坏 → 跳过该项/空列表，记 WARN，不抛；按 sortOrder 稳定排序
+  Future<void> saveDevices(List<AcDevice> devices);  // 写 device.index（重排 sortOrder=0..n-1）；不写 state
+  Future<void> saveState(String deviceId, AcState state);
+  Future<void> deleteState(String deviceId);
+}
+```
+`SharedPrefsDeviceRepository(SharedPreferences prefs, {required String fallbackProtocolId})`；写失败（`setString` 返回 false）抛 `StateError`（调用方 `DeviceListController` 捕获并记 WARN，内存状态保持，不弹错误）。`remote_repository.dart` 的 `RemoteRepository` 缩减为只读写主题（删 `saveState/saveProtocolId`、`PersistedRemote.protocolId/states`）。
+`load()` 细节：`schemaVersion` 缺失或 <2 → 调 `LegacyV1Migrator.migrateIfNeeded()`；`device.index` 非字符串/非 JSON/`devices` 非数组 → 备份到 `device.index.corrupt`，返回 []；数组内非 Map 项或缺 `id` 项跳过；重复 `id` 保留第一个；`device.state.<id>` 缺失或损坏 → `AcState.initial()`（协议 normalize 由控制器完成）；`device.state.*` 中无对应设备的孤儿键 → 保留不读（不主动删，避免误删）；`deleteState` 在删除设备时清理。
+
+### 14.3 `LegacyV1Migrator`（`infrastructure/persistence/legacy_v1_migrator.dart`）
+`LegacyV1Migrator(SharedPreferences prefs, {required String fallbackProtocolId})`，`Future<void> migrateIfNeeded()`：
+1. `schemaVersion >= 2`（int）→ 直接返回（**幂等**，不再触碰任何键）。
+2. 读 v0.1 数据：`remote.protocolId`（非 String 视为缺失）、全部 `remote.state.<pid>`（JSON 损坏 → 跳过并记 WARN；字段容错沿用 `AcState.fromJson`）。
+3. **无遗留数据**（protocolId 与所有 state 都不存在）→ 全新安装：不创建设备（首页显示空状态），写 `schemaVersion=2`，返回。
+4. 有遗留数据 → 创建**一台**默认设备：`id='legacy-1'`、`name='我的空调'`、`room=null`、`icon=generic`、`protocolId = legacy protocolId ?? fallbackProtocolId`（未知协议 id 原样保存，`DeviceListController` 载入时按 registry 回落 fallback 并记 WARN）、`overrides=none`、`state = states[protocolId] ?? AcState.initial()`、`pairingConfirmed=false`、`sortOrder=0`。**其他协议各自的旧状态丢弃**（它们属于同一台物理空调的备选型号）。
+5. 写入顺序：`device.state.legacy-1` → `device.index` → `app.schemaVersion=2`（最后）。任何一步抛错 → 向上抛由 `load()` 捕获：记 WARN、返回当前内存结果 []（下次启动重试）；因写入是确定性覆盖，**中途崩溃后重跑结果相同（幂等）**。
+6. 用户升级后又装回 0.1：0.1 仍能读到遗留键（旧版状态不会随 0.2 变化），不报错。
+
+## 15. 应用层
+
+### 15.1 `DeviceListController`（`ChangeNotifier`）— 设备元数据与状态落盘的**唯一入口**
+```dart
+typedef DeviceIdGenerator = String Function();
+class DeviceListController extends ChangeNotifier {
+  DeviceListController({required AcProtocolRegistry registry, required DeviceRepository repository, DeviceIdGenerator? idGenerator});
+  static const maxDevices = 20;
+  bool get loaded;  List<AcDevice> get devices;  bool get isFull;  AcDevice? byId(String id);
+  Future<void> init();            // repository.load()；协议 id 未知 → 回落 registry.fallback.id 并 WARN；状态按有效能力 normalize（变化则回写 state）；loaded=true
+  Future<AcDevice?> add({required String name, String? room, AcIcon icon, required String protocolId,
+                         required AcState initialState, bool pairingConfirmed});   // 满额返回 null；trim/校验；追加到末尾；落盘 index+state
+  Future<void> update(AcDevice updated);   // 按 id 替换 name/room/icon/protocolId/overrides/pairingConfirmed；state 用新有效能力重新 normalize；落盘；notify
+  Future<void> remove(String id);          // 删除 + deleteState；UI 负责二次确认
+  Future<void> reorder(int oldIndex, int newIndex);   // 语义同 ReorderableListView.onReorder（newIndex>oldIndex 时先 -1）；重排 sortOrder；落盘
+  void saveState(String id, AcState state);           // RemoteController 专用：更新内存（**不 notify**，避免首页无谓重建）+ 排队落盘
+  List<String> get warnings;                           // 仅测试/诊断用
+}
+```
+所有仓库写入经内部串行队列（沿用 0.1 `_persistenceFuture` 模式），失败只记 WARN。`add/update/remove/reorder` 先更新内存并 `notifyListeners()`（乐观），再落盘。
+
+### 15.2 `RemoteSessionFactory` 与 Provider
+`RemoteSessionFactory({registry, transmitter, devices})`，方法：`RemoteController create(String deviceId)`、`AddDeviceWizardController createWizard({AcDevice? repairing})`、`DeviceSettingsController createSettings(String deviceId)`。`app.dart` 用 `MultiProvider` 提供：`DeviceListController`、`ThemeController`、`RemoteSessionFactory`、`DiagnosticsController`。presentation 不直接持有 `IrTransmitter`：向导控制器由 `AddDevicePage` 内 `ChangeNotifierProvider(create: …)` 创建，所需依赖经 factory 方法 `createWizard({AcDevice? repairing})` 获取；设置页控制器经 `createSettings(String deviceId)` 获取。路由：`HomePage` 为 `home`；点击设备 `Navigator.push(MaterialPageRoute(builder: (_) => ChangeNotifierProvider(create: (_) => factory.create(id)..init(), child: const RemotePage())))`，页面销毁时 Provider 自动 `dispose` 控制器。
+
+### 15.3 `RemoteController`（每台设备一个，修订自 §8.2）
+```dart
+class RemoteController extends ChangeNotifier {
+  RemoteController({required String deviceId, required AcProtocolRegistry registry,
+                    required IrTransmitter transmitter, required DeviceListController devices});
+  AcDevice get device;               // 取自 devices.byId(deviceId)；读取时的最新值
+  String get title => device.name;
+  AcProtocol get protocol;           // registry.byId(device.protocolId) ?? registry.fallback
+  AcCapabilities get capabilities;   // = protocol.capabilities.restrictedBy(device.overrides)  ←有效能力
+  AcState get state;  IrAvailability get irAvailability;  bool get isSending;  Stream<RemoteEvent> get events;
+  Future<void> init();               // 取设备状态 → capabilities.normalize → 探测 IR；**不发码**
+  Future<void> recheckIr();  Future<void> update(AcState Function(AcState) mutate);  // togglePower/setMode/stepTemp/… 语法糖同 0.1
+}
+final class DeviceRemoved extends RemoteEvent {}   // 新增事件：设备被删除，遥控页收到后 pop 并提示
+```
+- 删除 `setProtocol`、按协议状态表、`logSnapshot/logFilePath`（迁至 `DiagnosticsController`）。
+- 构造时 `devices.addListener(_onDevicesChanged)`，`dispose` 时移除。`_onDevicesChanged`：设备已不存在 → 发 `DeviceRemoved`，清空待发；否则若协议或 overrides 变了 → 清空 `_pending`，`state = capabilities.normalize(state)`；若变化则 `devices.saveState`；`notifyListeners()`；**不发码**。仅名称/房间/图标变化 → 仅 notify。
+- `update`：沿用 0.1 的串行化+合并；`next = capabilities.normalize(mutate(state))`（**有效能力**）；落盘改为 `devices.saveState(device.id, next)`；发送用 `_pendingProtocol.encode(next)`，日志格式 `deviceId | protocolId | hex | n | ms`。
+- 切到别的设备/返回首页时不保留任何在途发送（路由销毁即 `dispose`，`_pending=null`）。
+- 两台设备互不影响：各自 `AcState`、各自 `protocol`、各自覆盖。
+
+### 15.4 `DeviceSettingsController`（设置页草稿）
+```dart
+final class ProtocolOption { final String id, brandName, modelName, note; }   // presentation 用；由 AcProtocol 映射
+class DeviceSettingsController extends ChangeNotifier {
+  DeviceSettingsController({required String deviceId, required DeviceListController devices, required AcProtocolRegistry registry});
+  AcDevice get draft;  bool get hasChanges;  String? get nameError;     // 'empty'|'tooLong'|null
+  List<ProtocolOption> get protocolOptions;       // = registry.modelsOf(draft 品牌)
+  AcCapabilities get protocolCapabilities;        // 草稿协议的原始声明（决定有哪些开关行）
+  AcCapabilities get effectiveCapabilities;       // 预览
+  void setName(String); setRoom(String); setIcon(AcIcon); setProtocol(String id);
+  void setModeVisible(AcMode m, bool v); setFanSpeedVisible(FanSpeed f, bool v); setFeatureVisible(AcFeature f, bool v);
+  void setSwingVisible(VerticalSwing s, bool v); void setAllSwingVisible(bool v);   // “有扫风功能”总开关
+  void setTempRange(int? min, int? max);
+  Future<bool> save();                             // nameError==null → devices.update(draft)；返回是否成功
+  Future<void> delete();                           // devices.remove(id)
+}
+```
+保护：不允许把模式/风速全部隐藏（`setModeVisible(…, false)` 若会导致可见数 0 则忽略并置 `lastRejected`，UI 提示“至少保留一个”）。更换协议时，草稿的 overrides 中**协议不支持的项**保留（无害，restrictedBy 会忽略不在协议里的项）。
+
+### 15.5 `DiagnosticsController`
+`List<String> logSnapshot([int n=200])`、`String logFilePath()`，转发 `LogService`（application 允许 import `log_service.dart`）。
+
+## 16. UI（v0.2.0）
+
+### 16.1 导航
+`HomePage`（home）→ `RemotePage(device)` →（AppBar 设置）`DeviceSettingsPage` → 「重新配对测试」→ `AddDevicePage(repair)`；`HomePage` → 「添加空调」FAB → `AddDevicePage(create)`。纯 `Navigator`，不引入 go_router。
+
+### 16.2 首页 `HomePage`
+- AppBar：标题「我的空调」；actions：主题切换、诊断、「为什么不能自动发现？」(info) → 对话框（红外单向说明，同 intro 文案）。
+- 有设备：`ReorderableListView`（每行 `ListTile`：左侧 `AcIcon` 图标，标题=名称，副标题=`房间 · 品牌 / 型号`（房间为空则只显示品牌型号；`pairingConfirmed==false` 追加「未做配对测试」小字），右侧拖拽手柄 + `PopupMenuButton`〔设置 / 删除〕）；点击整行进入遥控页；拖拽结束调用 `reorder`。删除弹 `AlertDialog`「删除“主卧”？仅删除本应用中的记录，不影响空调本身。」〔取消 / 删除〕确认后才调用 `remove`。
+- 空状态（`loaded && devices.isEmpty`）：居中图标 + 标题「还没有添加空调」+ 说明「红外遥控是单向的，手机无法自动发现空调。点击下方按钮添加，并对准空调做一次配对测试。」+ 主按钮「添加空调」。（正文必须同时出现在测试可查的 `Strings` 常量中。）
+- FAB「添加空调」（满额禁用，提示“最多 20 台”）。`loaded==false` 显示进度指示。
+
+### 16.3 遥控页 `RemotePage`（修订自 §9）
+- AppBar：`title: Text(controller.title)`（设备名），可选副标题 `房间`；actions：「按钮说明」(help_outline)、「设备设置」(tune)。**不再有协议下拉**；主题/诊断移到首页。
+- 控件显隐全部来自**有效能力** `capabilities`：模式行仅在 `modes.length>1`；风速行仅在 `fanSpeeds.length>1`；扫风行仅在 `verticalSwings.length>1`；功能 chip 仅渲染 `features` 内项；温度显示选择器需 `tempDisplay∈features && tempDisplays.length>1`；`−/+` 的边界 = `capabilities.minTempC/maxTempC`。灰色禁用来自 `isFeatureEnabled/canEditTemp/canEditFan`。
+- 收到 `DeviceRemoved` → `Navigator.pop` + SnackBar「该空调已被删除」。
+- `econo` 模式的 `SegmentedButton` 标签「节能」，图标 `eco`。
+
+### 16.4 `AddDevicePage`（向导页）
+`Stepper`-less 简洁多页（`AnimatedSwitcher` 按 `state.step`）：
+- intro：标题「添加空调」，图标 + 说明（红外单向、无法自动发现、对准空调几米内）；无红外时 `NoIrBanner`；按钮〔开始〕。
+- info：名称（必填，计数 20，错误文案「请输入名称（1–20 个字）」）、房间（可选）、图标选择（`ChoiceChip` 网格）；〔上一步〕〔下一步〕。
+- brand：品牌单选（目前仅「格力 Gree」）；提示“只有 Gree 时也请确认”；〔上一步〕〔下一步〕。
+- pairing：idle →「点击开始，手机会向空调发送一条“开机·制冷·26 °C”测试信号」〔开始测试〕〔跳过〕；sending →「正在发送：YAW1F（1/3）…」进度；awaitingAnswer →「**空调有响应（滴声）吗？**」〔有响应〕〔没反应，试下一个〕〔重发〕；sendFailed → 错误文案（沿用 `Strings.error(code)`）+〔重发〕〔跳过〕；exhausted → §13.3 的提示列表 + 型号下拉〔仍然保存〕〔重新测试〕。repair 模式隐藏名称/房间，文案提示“测试会让空调开机并制冷 26 °C”。
+- 保存成功（create）→ pop 回首页 + SnackBar「已添加“主卧”」。
+
+### 16.5 `DeviceSettingsPage`
+草稿式编辑，右上角〔保存〕（有改动才可点；返回时有未保存改动弹确认放弃）。分组：
+1. **基本信息**：名称、房间、图标。
+2. **遥控协议型号**（标题必须用此措辞，不要叫“设备/空调”）：下拉（`ProtocolOption`：`格力 Gree / YAW1F` + `note`）+ 说明小字「同一品牌的不同遥控器编码，不是不同的空调。选错可能导致部分按键无效」+ 〔重新配对测试〕按钮。
+3. **功能显示**（每项一个 `SwitchListTile`，仅列出**协议支持**的项；关=隐藏）：模式（各模式一行）、风速（各档）、扫风（总开关“有扫风功能”，展开可单独关闭某些位置）、附加功能（强劲/灯光/换气/睡眠/温度显示）、温度范围（`RangeSlider`）。底部说明「隐藏的功能不会出现在遥控页，发送时保持默认（灯光=亮，其余=关）」+ 〔按钮说明〕入口。
+4. **危险区**：〔删除此空调〕（二次确认）。
+
+## 17. Gree YX1FSF 编码
+
+依据：`gree_ac_remote_model_t::YX1FSF`（IRsend.h：“Soleus Air window unit (Similar to YAW1F, but with an Operation mode of Energy Saver (Econo))”）、`ir_Gree.cpp`（`kGreeEcono = 5`；`setRaw` 在 `Mode==5` 时判定 YX1FSF；`getEcono` = `Econo位 || Mode==5`）、`ir_Gree_test.cpp` 的 `Issue1821EnergySaver`。
+
+### 17.1 与 YAW1F 的编码差异（逐条，唯一差异 = 1 条）
+| 项 | YAW1F | YBOFB | YX1FSF |
+|---|---|---|---|
+| byte2 bit6 ModelA | 开机=1，关机=0 | 恒 0 | **同 YAW1F：开机=1，关机=0** |
+| byte0 bit0–2 Mode | 0..4 | 0..4 | 0..4，**另允许 5 = Econo（节能）** |
+| byte7 bit2 Econo 位 | 0 | 0 | 0（保持 0） |
+| 其余全部位 | 同 §5.3 | 同 | 同 |
+- **决策说明（与上游代码不一致处，务必按此实现）**：上游 `IRGreeAC::setPower` 只在 `model==YAW1F` 时置 ModelA，若按 `setModel(YX1FSF)` 编码会得到 ModelA=0；但上游收录的**真实 YX1FSF 遥控器抓包** `1D 09 60 58 00 20 00 A0`（byte2 = `0x60`，ModelA=1）显示该机型开机时 ModelA=1，且 IRsend.h 注释称其“类似 YAW1F”。以实测向量为准：`modelA = power && (model == yaw1f || model == yx1fsf)`。
+- 上游 `setEcono(true)` 还会置 byte7 bit2；但真实抓包 Econo 位为 0（`toString` 显示 `Econo: Off`），故本项目 Econo 仅通过 Mode=5 表达，**不写 byte7 bit2**。
+- 该抓包的 byte3=`0x58`（UseFahrenheit=1，77 °F），本项目仅摄氏，故编码向量使用 byte3=`0x50` 的摄氏等价帧；原始抓包只用于**解码/校验和**断言（与 0.1 对 `heat-indoor` 的处理方式一致，记入 plan 偏差）。
+
+### 17.2 领域与协议改动
+- `AcMode` 追加 `econo`（枚举末尾，`index==5`，JSON 名 `'econo'`）。UI 标签「节能」。
+- `GreeModel` 追加 `yx1fsf`；`GreeProtocol(GreeModel.yx1fsf)`：`id='gree.yx1fsf'`，`modelName='YX1FSF'`，`modelNote='类似 YAW1F，另有“节能（Econo）”模式；Soleus Air 窗机等'`。
+- `GreeProtocol.capabilities` 改为**按变体构造**：`modes = model==yx1fsf ? [auto,cool,dry,fan,heat,econo] : [auto,cool,dry,fan,heat]`（不再 `AcMode.values`）；其余与 0.1 相同。`modeRules[econo] = ModeRule(allowedFeatures: {light, tempDisplay})`（保守取值：温度/风速可调，无 turbo/xfan/sleep；待真机微调，仅改此表与测试）。
+- `GreeStateCodec.encode`：`ModelA = s.power && (model == yaw1f || model == yx1fsf)`；Mode 位 `s.mode.index`（econo→5，且仅当 `model==yx1fsf`；其他变体收到 econo 时因 normalize 已回落，codec 额外防御：`model != yx1fsf && mode==econo` → 抛 `ArgumentError`）。
+- `GreeStateCodec.decode(bytes)`：Mode 值 5 → `model==yx1fsf ? econo : auto`（沿用 0.1 对未知值回落 auto）。
+- `AcProtocol` 追加：`String get modelNote;`（中文一句话描述）与 `AcState get pairingProbe;`（§13.5；Gree：`defaultState.copyWith(power:true, mode:cool, targetTempC:26, fan:auto, light:true)`，YX1FSF 的 mode=econo；返回前经本协议 `normalize`）。
+- 注册顺序：`yaw1f`（fallback，默认）、`ybofb`、`yx1fsf`。
+
+### 17.3 新增向量（`test/support/gree_vectors.dart`）
+| 名称 | model | 字节 | AcState | 来源 |
+|---|---|---|---|---|
+| econo-on-yx1fsf | yx1fsf | `1D 09 60 50 00 20 00 20` | on, econo, 25, fan low, light, swing off, tempDisplay off | 上游抓包 `1D 09 60 58 00 20 00 A0` 的摄氏等价（byte3 0x58→0x50，校验和 `0xA`→`0x2`：10+13+9+0+0+0+2+0=34→2） |
+| econo-off-yx1fsf | yx1fsf | `15 09 20 50 00 20 00 A0` | off, econo, 25, fan low, light | 按规则推导（ModelA=0；10+5+9+0+0+0+2+0=26→0xA），**标注为推导向量** |
+| econo-raw-fahrenheit | yx1fsf | `1D 09 60 58 00 20 00 A0` | 仅 decode：power on、mode econo、fan low、light on；`isValid`=true；**不参与 encode 断言** | `Issue1821EnergySaver` |
+| cool-on-yx1fsf | yx1fsf | `59 07 60 50 01 20 00 C0` | 同 `on-yaw1f` | 与 YAW1F 完全一致（证明非节能帧相同） |
+
+### 17.4 配对探测帧（断言用，手工校验和已核对）
+| 协议 | 探测状态 | 字节 |
+|---|---|---|
+| yaw1f | on, cool, 26, fan auto, light, swing off, display off | `09 0A 60 50 00 20 00 F0`（10+9+10+0+0+0+2+0=31→F） |
+| ybofb | 同上 | `09 0A 20 50 00 20 00 F0`（ModelA=0；低半字节不含 bit6，校验和同为 F） |
+| yx1fsf | on, **econo**, 26, … | `0D 0A 60 50 00 20 00 30`（10+13+10+0+0+0+2+0=35→3） |
+注意：YAW1F 与 YX1FSF 的**非节能**帧相同、YBOFB 与 YAW1F 仅 ModelA 位不同，而许多空调对 ModelA 并不敏感——所以“有响应”**不能保证型号唯一正确**，只能保证“这个变体能被听懂”；这是红外单向的固有限制，须在成功页与 README 如实说明（§13.3）。
+
+## 18. 测试清单（v0.2.0）
+**新增 / 修改文件**（`flutter test` 全绿，不依赖设备）：
+| 文件 | 要点 |
+|---|---|
+| `test/domain/ac_device_test.dart` | meta JSON 往返；`fromMetaJson` 容错（缺字段/未知 icon/空 name→“我的空调”/room 空串→null）；`validateName`（空白、21 字、边界 20 字）；`copyWith`；值相等 |
+| `test/domain/capability_overrides_test.dart` | JSON 往返与容错（非 Map、未知名、非 int 温度）；`restrictedBy`：模式/风速/扫风/功能/温度范围交集；`none` 等价于原能力；幂等；有效⊆协议（对 3 个 Gree 变体 × 多组覆盖的属性测试）；全部模式或风速被隐藏→忽略覆盖；`off` 扫风不可隐藏；min>max 忽略；协议强制值（自动 25 °C、除湿低风）不受覆盖影响 |
+| `test/domain/ac_capabilities_test.dart`（改） | 被隐藏功能 normalize 为中性值（light→true，其余→false/off）；模式不允许仍为 false；`normalize` 幂等；隐藏当前模式/风速/扫风/超范围温度的回落；econo 模式规则 |
+| `test/domain/capability_explainer_test.dart` | 四种状态与优先级；`state` 为 null/非 null；health 对 Gree=unsupportedByProtocol；送风模式下 turbo=lockedByMode；隐藏优先于 locked |
+| `test/domain/ac_state_test.dart`（改） | `econo` 往返；未知 mode 名回落 cool |
+| `test/protocol/gree_state_codec_test.dart`（改） | §17.3 全部向量 encode/decode/往返；yx1fsf 对所有非 econo 状态样本与 yaw1f **字节完全相同**；ybofb/yaw1f 收到 econo 时 `ArgumentError`；Mode=5 在 yaw1f 解码→auto |
+| `test/protocol/gree_protocol_test.dart`（改） | 三变体的 `capabilities.modes`；`pairingProbe` 的 `debugHex` = §17.4；`encode(pairingProbe)` carrier=38000、validate 不抛；modelNote 非空 |
+| `test/protocol/protocol_registry_test.dart`（改） | `modelsOf('gree')` 长度 3 且顺序 yaw1f,ybofb,yx1fsf；`brandNameOf` |
+| `test/infrastructure/shared_prefs_device_repository_test.dart` | 增删改查；顺序与 `sortOrder` 重排；`saveState` 独立写；`deleteState`；索引损坏→[]+备份；项损坏被跳过；重复 id；状态缺失/损坏→initial；写失败抛 `StateError`（mock `setString` 返回 false） |
+| `test/infrastructure/legacy_v1_migrator_test.dart` | v1 数据（protocolId+多协议状态）→ 单设备“我的空调”，protocolId/状态取所选协议，其他丢弃；仅有 state 无 protocolId→fallback；全新安装→无设备且 schema=2；**幂等**（连跑两次结果相同、第二次不写任何键）；schema=2 时不触碰遗留键；损坏 JSON/非 String 值；中途失败（索引已写、schema 未写）重跑结果相同；遗留键保留 |
+| `test/infrastructure/shared_prefs_remote_repository_test.dart`（改） | 仅主题；删除状态/协议用例（迁入 migrator 测试） |
+| `test/application/add_device_wizard_test.dart` | §13.3 迁移表**逐行**一条用例：成功路径（第一个即“有响应”）、No→下一个→…→exhausted→SelectFallback→SaveFallback、Resend 递增 seq 与 resendCount、过期 `ProbeResult` 被忽略、sendFailed、无红外、Skip、Back 使在途失效、非法事件无副作用、名称校验、repair 模式起点、确定性（同输入同输出） |
+| `test/application/add_device_wizard_controller_test.dart` | 用 `FakeIrTransmitter`：每个 `SendProbe` 恰发出对应 `pairingProbe` 帧；**直到 Complete 前 `InMemoryDeviceRepository` 零写入且 `DeviceListController.devices` 不变**；Complete(create) 后新设备含正确 protocolId/初始状态/`pairingConfirmed`；repair 不写库；发送异常→sendFailed |
+| `test/application/device_list_controller_test.dart` | init 回落未知协议；add（trim/校验/上限 20→null）；update 后状态按新有效能力 normalize 并落盘；remove 清状态；reorder 语义（含 newIndex>oldIndex）与持久化；`saveState` 不触发 listener；写失败不回滚内存且记 WARN |
+| `test/application/device_settings_controller_test.dart` | 草稿/hasChanges；名称错误；开关→有效能力预览；拒绝隐藏最后一个模式/风速；`save` 落到 `DeviceListController`；更换协议 |
+| `test/application/remote_controller_test.dart`（改） | 两台设备状态/协议隔离；init 不发码；隐藏 light 后发出的帧 byte2 bit5 仍为 1、隐藏 turbo 后帧 bit4=0；隐藏当前模式→回落且落盘；设置变更（协议/覆盖）重新 normalize 且**不发码**；设备被删→`DeviceRemoved`；保留 0.1 的合并/串行/失败/unavailable 用例（改用设备构造） |
+| `test/presentation/home_page_test.dart` | 空状态（标题「还没有添加空调」与说明文案、「添加空调」按钮）；有设备时列表顺序与副标题；删除确认对话框（取消不删、确认删）；拖拽重排（`ReorderableListView` 的 onReorder 回调）；点击进入遥控页且 AppBar 显示设备名；满额禁用 |
+| `test/presentation/add_device_page_test.dart` | intro 文案含“红外是单向的/无法自动发现”；名称为空不能前进；配对页出现「空调有响应（滴声）吗？」「有响应」「没反应，试下一个」「重发」；点“没反应”依次发送 3 个不同探测帧后出现排查提示与「仍然保存」；点“有响应”后首页出现新设备 |
+| `test/presentation/remote_page_test.dart`（改） | **无协议下拉**；AppBar=设备名；覆盖隐藏扫风/灯光/换气后对应行/chip 消失；econo 协议出现「节能」；`unavailable` 横幅沿用 |
+| `test/presentation/device_settings_page_test.dart` | 分组标题「遥控协议型号」；切换开关→保存→遥控页控件消失；未保存返回确认；删除确认 |
+| `test/presentation/control_help_sheet_test.dart` | 四类徽标文案出现；health 显示“此协议不支持” |
+| `test/architecture_test.dart`（改） | application 允许 import `/device_repository.dart`；新增断言：`legacy_v1_migrator.dart` 只被 `infrastructure/` 内文件 import；`add_device_wizard.dart` 不 import `package:flutter`、`dart:io`、`infrastructure/` 任何文件（纯状态机）；`lib/domain/` 新文件仍零外部依赖；presentation 不 import `protocol/`、`infrastructure/` |
+| `test/version_test.dart`（改） | `AppConstants.version=='0.2.0'`、pubspec `version: 0.2.0`、README 含 `0.2.0`、`docs/versions/0.2.0.md` 存在、`architecture.md` 含 “v0.2.0 变更” |
+| `test/support/*` | 新增 `in_memory_device_repository.dart`（可注入失败）；`pump_app.dart` 预置 1 台设备并可选择空列表；`in_memory_remote_repository.dart` 仅主题 |
+
+## 19. 里程碑与完成定义（v0.2.0）
+| # | 里程碑 | 产出 |
+|---|---|---|
+| M8 | 领域 | `AcMode.econo`、`AcDevice/AcIcon`、`CapabilityOverrides`、`restrictedBy` + `suppressedFeatures` + normalize 中性值、`explainControls` + 对应 domain 测试 |
+| M9 | 协议 | `GreeModel.yx1fsf`、按变体 capabilities、`modelNote/pairingProbe`、新向量、registry 3 变体 + `brandNameOf` |
+| M10 | 基础设施 | `DeviceRepository` + SharedPrefs 实现、`LegacyV1Migrator`、`RemoteRepository` 缩减、对应测试 |
+| M11 | 应用层 | `DeviceListController`、每设备 `RemoteController`、`RemoteSessionFactory`、`DeviceSettingsController`、`AddDeviceWizard` + 控制器、`DiagnosticsController` + 测试 |
+| M12 | 表现层 | `HomePage`、`AddDevicePage`、`DeviceSettingsPage`、`ControlHelpSheet`、`RemotePage` 改造、删除 `BrandSelector`、`app.dart/main.dart` 装配 + widget 测试 |
+| M13 | 收尾 | 版本 0.2.0（`pubspec.yaml`、`AppConstants.version`、`version_test`）、README、`plan.md`、`architecture_test` 更新、`flutter analyze`/`test`/release APK 验收、CI |
+
+**完成定义（0.2.0）**：
+1. `flutter analyze` 零问题；`flutter test` 全绿（含 §18 全部新增/修改用例）。
+2. v0.1 → v0.2 升级：已有用户首次启动得到一台“我的空调”，协议与状态保持，不发码；二次启动不重复迁移；全新安装显示空状态。
+3. 首页可添加 / 编辑 / 删除（确认）/ 拖拽排序，重启后顺序与内容保持；遥控页 AppBar 显示设备名，**无协议下拉**；设置页该选项称「遥控协议型号」。
+4. 向导可走通：成功路径、依次失败路径、全失败仍保存、跳过、从设置重新配对；测试发码在保存前不改动任何持久化数据。
+5. 设置页隐藏开关立即影响遥控页显隐，且发送帧中隐藏项为中性值；「按钮说明」与实际显隐一致。
+6. 架构测试通过；代码仍分层；0.1.0 的全部既有测试（经必要改写）保持通过；版本 0.2.0 在 pubspec / 常量 / README / 文档 / 版本测试一致。
+7. 真机验收（带红外的 Android 手机）：向导三种型号探测帧均能发出（可借助另一部手机相机观察红外灯）；多台设备互不串状态。
+
+### 19.1 已知风险与待验证
+- 配对测试只能证明“某变体能被听懂”，不能唯一确定型号（§17.4）；文案已如实说明，设置页可随时改型号。
+- YX1FSF 的 ModelA 取值依据单条上游抓包，econo 模式下的功能约束为保守取值，待真机验证。
+- 隐藏灯光时发送“灯亮”的中性值假设“无灯空调忽略该位、有灯空调保持常亮”；如实机反馈不符，只需改 §12.4 的中性值表（`AcState.initial()` 的 `light` 默认值）及测试。
+- 迁移只保留所选协议的旧状态；其他协议旧状态被丢弃（同一台空调的备选型号，影响很小）。
