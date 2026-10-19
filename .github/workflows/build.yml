@@ -17,6 +17,8 @@ env:
   JAVA_VERSION: '21'
   FLUTTER_VERSION: '3.47.7'
   APP_NAME: ${{ github.event.repository.name }}
+  # 正式签名证书 SHA-256（小写、无冒号）；tag 构建会校验 APK 签名证书与之一致
+  EXPECTED_CERT_SHA256: 'f5180a84cc33145d6e0519be637bd5507926bb19da2fa82d5eeadd3e7380f3a6'
 
 jobs:
   metadata:
@@ -33,14 +35,19 @@ jobs:
         id: version
         shell: bash
         run: |
-          jversion=$(grep '^version:' pubspec.yaml | awk '{print $2}')
+          jversion=$(grep '^version:' pubspec.yaml | awk '{print $2}' | sed -E 's/\+.*$//')
           if [[ "${{ github.ref_type }}" == "tag" ]]; then
             raw_tag="$GITHUB_REF_NAME"
             version=$(echo "$raw_tag" | sed -E 's/^[vV]//')
             jversion=$(echo "$version" | sed -E 's/^([0-9]+\.[0-9]+(\.[0-9]+)?).*/\1/')
             if [ -z "$jversion" ]; then
-              jversion=$(grep '^version:' pubspec.yaml | awk '{print $2}')
+              jversion=$(grep '^version:' pubspec.yaml | awk '{print $2}' | sed -E 's/\+.*$//')
             fi
+          fi
+          pubspec_version=$(grep '^version:' pubspec.yaml | awk '{print $2}' | sed -E 's/\+.*$//')
+          if [[ "${{ github.ref_type }}" == "tag" && "$jversion" != "$pubspec_version" ]]; then
+            echo "::error title=Version mismatch::Tag version $jversion != pubspec version $pubspec_version"
+            exit 1
           fi
           echo "jversion=$jversion" >> $GITHUB_OUTPUT
           echo "Using version: $jversion"
@@ -104,15 +111,25 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
-      - name: Configure optional release signing
+      # 签名策略：
+      # - tag (v*) 构建：必须有完整的 4 个签名 secrets，否则直接失败，绝不回退到 debug 密钥发布。
+      # - 本仓库的 push / 同仓 PR：有 secrets 时用正式密钥；缺失时给出醒目 warning 并回退 debug 密钥。
+      # - 来自 fork 的 PR：GitHub 不下发 secrets，回退 debug 密钥（notice），保证 fork PR 仍可构建。
+      - name: Configure release signing
         env:
           KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          IS_TAG: ${{ startsWith(github.ref, 'refs/tags/v') }}
+          IS_FORK_PR: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
         shell: bash
         run: |
-          if [[ -n "$KEYSTORE_BASE64" ]]; then
+          present=0
+          for v in KEYSTORE_BASE64 KEYSTORE_PASSWORD KEY_ALIAS KEY_PASSWORD; do
+            [[ -n "${!v}" ]] && present=$((present + 1))
+          done
+          if [[ "$present" -eq 4 ]]; then
             python3 - <<'PYTHON'
           import base64, os
           from pathlib import Path
@@ -122,10 +139,43 @@ jobs:
           props = {'storeFile': 'upload-keystore.jks', 'storePassword': os.environ['KEYSTORE_PASSWORD'], 'keyAlias': os.environ['KEY_ALIAS'], 'keyPassword': os.environ['KEY_PASSWORD']}
           Path('android/key.properties').write_text(''.join(f'{key}={escape(value)}\n' for key, value in props.items()))
           PYTHON
+            echo "SIGNING_MODE=release" >> "$GITHUB_ENV"
+            echo "Release signing configured."
+          elif [[ "$present" -ne 0 ]]; then
+            echo "::error title=Release signing::Only $present of 4 signing secrets are set (ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD)."
+            exit 1
+          elif [[ "$IS_TAG" == "true" ]]; then
+            echo "::error title=Release signing::Tag build without signing secrets. Refusing to publish a debug-signed APK (users could not upgrade in place)."
+            exit 1
+          elif [[ "$IS_FORK_PR" == "true" ]]; then
+            echo "SIGNING_MODE=debug" >> "$GITHUB_ENV"
+            echo "::notice title=Release signing::Fork PR: secrets unavailable, building with the debug key (artifact not installable over official releases)."
+          else
+            echo "SIGNING_MODE=debug" >> "$GITHUB_ENV"
+            echo "::warning title=Release signing::Signing secrets missing; APK is signed with an ephemeral debug key and cannot upgrade official releases in place."
           fi
 
       - name: Build Android APK
         run: flutter build apk --release --target-platform android-arm64
+
+      - name: Verify APK signer
+        shell: bash
+        run: |
+          apk=build/app/outputs/flutter-apk/app-release.apk
+          apksigner=$(ls -d "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)
+          certs=$("$apksigner" verify --print-certs "$apk")
+          grep -E 'certificate (DN|SHA-256)' <<<"$certs" || echo "$certs"
+          if [[ "$SIGNING_MODE" == "release" ]] && grep -q 'CN=Android Debug' <<<"$certs"; then
+            echo "::error title=Release signing::Signing secrets were configured but the APK is debug-signed."
+            exit 1
+          fi
+          if [[ "${{ startsWith(github.ref, 'refs/tags/v') }}" == "true" ]]; then
+            if ! grep -qi "certificate SHA-256 digest: ${EXPECTED_CERT_SHA256}" <<<"$certs"; then
+              echo "::error title=Release signing::Release APK signer certificate does not match the pinned SHA-256 ${EXPECTED_CERT_SHA256} (wrong or rotated keystore secret?)."
+              exit 1
+            fi
+            echo "Signer certificate matches pinned SHA-256."
+          fi
 
       - name: Rename Android APK
         run: |

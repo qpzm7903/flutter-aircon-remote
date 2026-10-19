@@ -787,12 +787,12 @@ sequenceDiagram
 - `android/gradle.properties`：`org.gradle.jvmargs=-Xmx4G`、`android.useAndroidX=true`、`android.newDsl=false`、`android.builtInKotlin=false`、`kotlin.incremental=false`。
 - `android/gradle/wrapper/gradle-wrapper.properties`：Gradle `9.5.1`（沿用参考的 distributionUrl 写法；若 CI 拉取不稳定，改为 `services.gradle.org` 即可）。
 - `android/app/build.gradle`：`namespace/applicationId = com.example.flutter_aircon_remote`，`compileSdk 37`，`minSdk 35`，`targetSdk 37`，
-  Java/Kotlin `21`，`ndk { abiFilters 'arm64-v8a' }`，`versionName` 读 `flutter.versionName`（默认 `0.1.0`），
+  Java/Kotlin `21`，`ndk { abiFilters 'arm64-v8a' }`，`versionName` 读 `flutter.versionName`（默认 `0.3.1`），`versionCode` 读 `flutter.versionCode`（默认 `301`），
   `sourceSets { main.java.srcDirs += 'src/main/kotlin' }`，依赖 `kotlin-stdlib:2.3.21`、`coreLibraryDesugaring desugar_jdk_libs:2.1.5`（与参考一致）。
 - `.gitignore`：沿用参考，并确保包含 `key.properties`、`*.jks`、`*.keystore`、`android/local.properties`。
 
 ### 10.4 签名（禁止提交任何密钥/口令）
-默认使用 AGP 自带 debug 签名；仅当存在 `android/key.properties`（由 CI 从 secrets 生成）时切换为 release 签名：
+v0.3.1 变更：正式发布使用稳定的 release keystore；本地未配置时使用 AGP 自带 debug 签名。当存在 `android/key.properties`（由 CI 从 secrets 生成）时切换为 release 签名：
 ```groovy
 def keystoreProps = new Properties()
 def keystorePropsFile = rootProject.file('key.properties')
@@ -818,8 +818,10 @@ android {
     }
 }
 ```
-（不显式声明 `signingConfigs.debug`，使用 AGP 默认 debug keystore。）CI secrets（均可选）：
+（不显式声明 `signingConfigs.debug`，使用 AGP 默认 debug keystore。）CI secrets（正式 tag 发布必需，必须完整配置）：
 `ANDROID_KEYSTORE_BASE64`、`ANDROID_KEYSTORE_PASSWORD`、`ANDROID_KEY_ALIAS`、`ANDROID_KEY_PASSWORD`。
+
+密钥与凭据由所有者离线备份，永不提交；丢失会导致用户再次被迫卸载。versionCode 采用 `major*10000+minor*100+patch`，pubspec 为 `0.3.1+301`。旧 CI APK 使用临时 debug 签名且 versionCode 均为 1，升级到正式签名需一次卸载，删除全部空调和设置；此后同签名且版本号递增可覆盖安装。
 
 ### 10.5 GitHub Actions：`.github/workflows/build.yml`
 基于 flutter-snake 的 `build.yml`，**去掉 Windows 任务**，并扩展触发条件：
@@ -827,12 +829,13 @@ android {
 - `concurrency: group: build-${{ github.ref }}`，`cancel-in-progress: true`。
 - `env`：`JAVA_VERSION: '21'`、`FLUTTER_VERSION: '3.47.7'`、`APP_NAME: ${{ github.event.repository.name }}`。
 - Job 链：
-  1. `metadata`：从 `pubspec.yaml`（tag 构建时从 tag）解析 `app_version`（逻辑同参考）。
+  1. `metadata`：从 `pubspec.yaml`（tag 构建时从 tag）解析 `app_version`，去掉 pubspec 的 `+build` 后缀。
   2. `test`（needs metadata）：checkout@v6 → `subosito/flutter-action@v2`（3.47.7, stable, cache）→ `flutter pub get` →
      `flutter analyze`（不加 `--no-fatal-warnings`，须零 warning/error；info 级允许 `--no-fatal-infos`）→ `flutter test`。
   3. `build-android`（needs metadata, test）：setup-java@v5（temurin 21, cache gradle）→ setup flutter → pub get →
-     **可选签名步骤**（`if` 判断 secret 是否存在；把 base64 解码到 `android/app/upload-keystore.jks` 并写 `android/key.properties`，不 echo 任何秘密）→
+     **签名策略检查**（tag 缺少 secrets 或任何部分配置均失败；同仓库 push 缺少时醒目警告并回退 debug；fork PR 提示后回退 debug；完整配置时把 base64 解码到 `android/app/upload-keystore.jks` 并写 `android/key.properties`，不 echo 任何秘密）→
      `flutter build apk --release --target-platform android-arm64` →
+     **Verify APK signer** 打印签名证书，release 签名模式产出 debug 签名 APK 时失败 →
      重命名为 `${APP_NAME}-${app_version}-android-aarch64.apk` → `actions/upload-artifact@v7`（`retention-days: 1`；PR 构建同样上传以便试装）。
   4. `release`（needs build-android；`if: startsWith(github.ref, 'refs/tags/v')`；`permissions: contents: write`；`environment: release`）：
      checkout（fetch-depth 0）→ download-artifact@v8（merge-multiple）→ 由上一个 tag 到当前 tag 的 `git log` 生成 release notes（排除 `docs`、`.github`）→

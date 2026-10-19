@@ -37,6 +37,14 @@
 
 说明：M14–M19 已实现，版本统一为 0.3.0；真机回填仍列为待验证，不以模拟发送代替。
 
+## v0.3.1（发布签名补丁）
+
+- [x] 版本统一为 `0.3.1`，pubspec `0.3.1+301`；versionCode 采用 `major*10000+minor*100+patch`，本次为 301。
+- [x] 正式发布使用稳定 release keystore；CI 检查 secrets 完整性、tag 必须签名，并验证 APK signer（工作流由协调者提供）。
+- [x] 补充一次卸载及数据丢失提示、证书验证说明、离线密钥备份要求，详见 [0.3.1 版本说明](docs/versions/0.3.1.md)。
+- [x] 本地验收：`flutter analyze` 零问题；`flutter test` 全部 228 个测试通过。
+- 本次不变更应用功能，不执行 release APK 构建，不提交。
+
 ## 本地验收结果（2026-10-18）
 
 - `flutter pub get` 成功。

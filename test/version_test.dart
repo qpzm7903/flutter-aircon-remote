@@ -6,24 +6,33 @@ import 'package:flutter_aircon_remote/core/constants.dart';
 
 void main() {
   test('version agrees with pubspec and native channel agrees with Dart', () {
-    expect(AppConstants.version, '0.3.0');
+    expect(AppConstants.version, '0.3.1');
     expect(
       File('android/app/build.gradle').readAsStringSync(),
       contains("'flutter.versionName', '${AppConstants.version}'"),
     );
     final readme = File('README.md').readAsStringSync();
-    expect(readme, contains('**v0.3.0 已实现**'));
+    expect(readme, contains('**v0.3.1 已实现**'));
     expect(readme, isNot(contains('尚未实现')));
     expect(readme, isNot(contains('0.2.0 不支持')));
     expect(readme, isNot(contains('版本说明（设计）')));
-    expect(File('docs/versions/0.3.0.md').existsSync(), true);
+    expect(File('docs/versions/0.3.1.md').existsSync(), true);
     expect(
       File('docs/architecture.md').readAsStringSync(),
-      contains('v0.3.0 变更'),
+      contains('v0.3.1 变更'),
     );
+    final pubspec = File('pubspec.yaml').readAsStringSync();
+    final version = RegExp(
+      r'^version: (\S+)$',
+      multiLine: true,
+    ).firstMatch(pubspec)!.group(1)!.split('+');
+    expect(version.first, AppConstants.version);
+    final buildNumber = int.parse(version[1]);
+    expect(buildNumber, 301);
+    expect(buildNumber, greaterThan(1));
     expect(
-      File('pubspec.yaml').readAsStringSync(),
-      contains('version: ${AppConstants.version}'),
+      File('android/app/build.gradle').readAsStringSync(),
+      contains("'flutter.versionCode', '$buildNumber'"),
     );
     expect(
       File(
